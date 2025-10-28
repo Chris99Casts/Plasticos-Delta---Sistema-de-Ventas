@@ -1,0 +1,5 @@
+id_pedido,fecha,cliente,total,estado,descuento,pagado,descuento_pago_pct,total_cobro
+20251024012941,2025-10-24 01:29,Alvaro,343.00,Parcial,1,0,,
+20251024013658,2025-10-24 01:36,Jorge,75.35,Completado,0,0,,
+202510-24013659,2025-10-24 21:29,Pablo Perez Palafox,1001.00,Completado,0,0,,
+202510-24013660,2025-10-24 21:30,Jorge Pérez Jimenez,800.02,Completado,0,1,10.00,720.02
