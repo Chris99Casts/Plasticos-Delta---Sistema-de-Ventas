@@ -17,11 +17,13 @@ class TabPedidos:
                  frame_style="Dark.TFrame",
                  tree_style="Dark.Treeview",
                  button_style="Dark.TButton",
+                 on_refresh_all=None,
                  label_style="Dark.TLabel"):
         self.frame_style = frame_style
         self.tree_style = tree_style
         self.button_style = button_style
         self.label_style = label_style
+        self.on_refresh_all = on_refresh_all
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
 
@@ -29,6 +31,11 @@ class TabPedidos:
         self._configure_grid()
         self._init_row_tags()       # <--- Colores por estado
         self.refrescar()
+    
+    # ------------------- Emitir refresh ----------------------
+    def _emit_refresh_all(self):
+        if callable(self.on_refresh_all):
+            self.on_refresh_all()
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -254,11 +261,15 @@ class TabPedidos:
             messagebox.showinfo("Info", "Este pedido no tiene líneas.")
             return
 
+        def _after():
+            self._on_editor_guardado()
+            self._emit_refresh_all()   # <-- NUEVO
+
         EditorMasivo(self.frame, self._current_pedido, items,
-                     on_saved=self._on_editor_guardado,
-                     frame_style=self.frame_style,
-                     button_style=self.button_style,
-                     label_style=self.label_style)
+                    on_saved=_after,
+                    frame_style=self.frame_style,
+                    button_style=self.button_style,
+                    label_style=self.label_style)
 
     def _on_editor_guardado(self):
         # Guarda el pedido seleccionado antes del refresh
@@ -295,11 +306,15 @@ class TabPedidos:
         fecha = vals[1]; cliente = vals[2]
         use_desc = (self._current_descuento == "1")
 
+        def _after():
+            self._on_editor_guardado()
+            self._emit_refresh_all()
+
         EditorPedido(self.frame, self._current_pedido, cliente, fecha, items, use_desc,
-                     on_saved=self._on_editor_guardado,
-                     frame_style=self.frame_style,
-                     button_style=self.button_style,
-                     label_style=self.label_style)
+                    on_saved=_after,
+                    frame_style=self.frame_style,
+                    button_style=self.button_style,
+                    label_style=self.label_style)
 
     def _show_ctx_menu(self, event):
         # Selecciona la fila bajo el cursor antes de mostrar el menú
@@ -348,6 +363,8 @@ class TabPedidos:
         for item in self.tree_detalle.get_children():
             self.tree_detalle.delete(item)
         self._current_pedido = None
+        self._emit_refresh_all()  # <-- NUEVO
+
 
     def _generar_pdf_pedido_sel(self):
         iid = self.tree_pedidos.selection()
@@ -642,15 +659,16 @@ class EditorPedido(tk.Toplevel):
 
             self._rows.append((id_linea, ent_prod, vprod, vcant, vpu, limpp, sugg))
 
+        # --- debajo de la tabla, botones ---
         line_btns = ttk.Frame(rootf, style=self.frame_style); line_btns.pack(fill="x", padx=15, pady=(6,0))
         ttk.Button(line_btns, text="Agregar línea", command=self._add_line, style=self.button_style).pack(side="left")
-        ttk.Button(line_btns, text="Eliminar líneas vacías", command=self._purge_empty, style=self.button_style).pack(side="left", padx=(8,0))
 
         bottom = ttk.Frame(rootf, style=self.frame_style); bottom.pack(fill="x", padx=15, pady=(8,12))
         ttk.Label(bottom, text="Total:", style=self.label_style).pack(side="left")
         self.lbl_total = ttk.Label(bottom, text="0.00", style=self.label_style); self.lbl_total.pack(side="left", padx=(6,0))
         ttk.Button(bottom, text="Guardar", command=self._guardar, style=self.button_style).pack(side="right")
         ttk.Button(bottom, text="Cancelar", command=self.destroy, style=self.button_style).pack(side="right", padx=(6,0))
+
 
         self._recalc_total()
         self.geometry("1000x650+120+80")
@@ -767,31 +785,29 @@ class EditorPedido(tk.Toplevel):
             messagebox.showerror("Error", "Cliente no puede estar vacío.")
             return
         try:
+            # Formato esperado: YYYY-MM-DD HH:MM
             datetime.strptime(fecha, "%Y-%m-%d %H:%M")
         except Exception:
             messagebox.showerror("Error", "Fecha inválida. Usa formato YYYY-MM-DD HH:MM")
             return
 
-        # --- normalizador de precio ---
+        # --- Normalizador de precio ---
         def norm_price(txt: str) -> float:
             if txt is None:
                 return 0.0
             s = str(txt).strip().replace(" ", "").replace("$", "")
             if not s:
                 return 0.0
-            has_comma = "," in s
-            has_dot = "." in s
-            if has_comma and has_dot:
-                last_c = s.rfind(","); last_d = s.rfind(".")
-                if last_c > last_d:
-                    s = s.replace(".", ""); s = s.replace(",", ".")
-                else:
-                    s = s.replace(",", "")
-            elif has_comma and not has_dot:
-                if s.count(",") == 1:
+            has_c = "," in s; has_d = "." in s
+            if has_c and has_d:
+                # si la última coma está después del último punto -> coma decimal
+                if s.rfind(",") > s.rfind("."):
+                    s = s.replace(".", "")
                     s = s.replace(",", ".")
                 else:
                     s = s.replace(",", "")
+            elif has_c and not has_d:
+                s = s.replace(",", ".") if s.count(",") == 1 else s.replace(",", "")
             else:
                 if s.count(".") > 1:
                     parts = s.split(".")
@@ -804,20 +820,28 @@ class EditorPedido(tk.Toplevel):
         # --- Construcción de líneas válidas evitando duplicados ---
         nuevas = []
         seen_ids = set()
-        for (id_linea, ent, vprod, q, vpu, limpp, sugg) in self._rows:
+        for (id_linea, ent, vprod, q, vpu, limpp, _sugg) in self._rows:
             line_id = str(id_linea or "").strip()
             prod = (vprod.get() or "").strip()
+
+            # cantidad
             try:
                 cant = int(q.get() or 0)
             except Exception:
                 cant = 0
+
+            # precio unitario normalizado
             pu_val = norm_price((vpu.get() or "0").strip())
 
-            if not prod:
-                continue
-            if cant <= 0 and pu_val <= 0:
+            # *** REGLA CLAVE: si cantidad == 0, NO guardamos esta línea ***
+            if cant <= 0:
                 continue
 
+            # si no hay producto, descartar también
+            if not prod:
+                continue
+
+            # evita duplicados de id_linea
             if line_id in seen_ids:
                 continue
             seen_ids.add(line_id)
@@ -825,15 +849,16 @@ class EditorPedido(tk.Toplevel):
             nuevas.append({
                 "id_linea": line_id,
                 "producto": prod,
-                "cantidad": int(max(0, cant)),
+                "cantidad": cant,
                 "precio_unitario": f"{pu_val:.2f}",
-                "importe": f"{max(0, cant) * pu_val:.2f}",
+                "importe": f"{cant * pu_val:.2f}",
             })
 
         if not nuevas:
-            if not messagebox.askyesno("Confirmar", "No hay líneas válidas. ¿Guardar pedido sin líneas?"):
+            if not messagebox.askyesno("Confirmar", "Todas las líneas quedaron en 0 o vacías.\n¿Guardar el pedido SIN líneas?"):
                 return
 
+        # --- Persistencia ---
         try:
             actualizar_pedido_completo(self.id_pedido, cliente, fecha, nuevas)
         except Exception as e:
@@ -844,6 +869,7 @@ class EditorPedido(tk.Toplevel):
         if callable(self.on_saved):
             self.on_saved()
         self.destroy()
+
 
 
 # ---------- Sugerencias tipo “Nueva Nota” (Entry + Listbox flotante) ----------

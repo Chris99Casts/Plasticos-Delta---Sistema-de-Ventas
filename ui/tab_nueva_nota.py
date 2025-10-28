@@ -34,6 +34,7 @@ class TabNuevaNota:
                  label_style="Dark.TLabel",
                  entry_style="Dark.TEntry",
                  check_style="Dark.TCheckbutton",
+                 on_refresh_all=None,
                  tree_style="Dark.Treeview"):
         self.frame_style = frame_style
         self.button_style = button_style
@@ -41,6 +42,7 @@ class TabNuevaNota:
         self.entry_style = entry_style
         self.check_style = check_style
         self.tree_style = tree_style
+        self.on_refresh_all = on_refresh_all
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
 
@@ -58,6 +60,11 @@ class TabNuevaNota:
         self.nombres_productos = [p["producto"] for p in self.productos_data]
 
         self.crear_ui()
+# ------------------- Emitir refresh ----------------------        
+    def _emit_refresh_all(self):
+        if callable(self.on_refresh_all):
+            self.on_refresh_all()
+
 
     # ------------------------- UI -------------------------
     def crear_ui(self):
@@ -413,6 +420,12 @@ class TabNuevaNota:
 
         # --- SIEMPRE: dejar lista la pestaña para otra captura ---
         self._flush_form()
+        # SIEMPRE: dejar lista la pestaña y refrescar todo
+
+        # ---- NUEVO: refrescar otras tabs si es necesario ----
+        self._flush_form()
+        self._emit_refresh_all()
+
 
 
     # ---------------- Abrir productos.csv -------------------

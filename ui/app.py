@@ -68,11 +68,12 @@ class NotaVentaApp:
                                      button_style="Dark.TButton",
                                      entry_style="Dark.TEntry",
                                      check_style="Dark.TCheckbutton",
+                                     on_refresh_all=self.refresh_all,
                                      tree_style="Dark.Treeview")
         self.tab_pedidos = TabPedidos(notebook,
                                       frame_style="Dark.TFrame",
+                                      on_refresh_all=self.refresh_all,
                                       tree_style="Dark.Treeview")
-
         notebook.add(self.tab_nota.frame, text="Nueva Nota")
         notebook.add(self.tab_pedidos.frame, text="Pedidos")
         
@@ -81,6 +82,7 @@ class NotaVentaApp:
             frame_style="Dark.TFrame",
             tree_style="Dark.Treeview",
             button_style="Dark.TButton",
+            on_refresh_all=self.refresh_all,
             label_style="Dark.TLabel"
         )
         notebook.add(self.tab_cobranza.frame, text="Cobranza")
@@ -104,3 +106,21 @@ class NotaVentaApp:
         except:
             pass
         self.is_fullscreen = False
+
+    def refresh_all(self):
+        """Refresca todas las tabs que expongan .refrescar()."""
+        try:
+            if hasattr(self.tab_nota, "refrescar"):    # si la tienes
+                self.tab_nota.refrescar()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.tab_pedidos, "refrescar"):
+                self.tab_pedidos.refrescar()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.tab_cobranza, "refrescar"):
+                self.tab_cobranza.refrescar()
+        except Exception:
+            pass

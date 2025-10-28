@@ -12,11 +12,13 @@ class TabCobranza:
                  frame_style="Dark.TFrame",
                  tree_style="Dark.Treeview",
                  button_style="Dark.TButton",
+                 on_refresh_all=None,
                  label_style="Dark.TLabel"):
         self.frame_style = frame_style
         self.tree_style = tree_style
         self.button_style = button_style
         self.label_style = label_style
+        self.on_refresh_all = on_refresh_all
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
 
@@ -24,6 +26,11 @@ class TabCobranza:
         self._configure_grid()
         self._init_row_tags()
         self.refrescar()
+    # ------------------- Emitir refresh ----------------------
+    def _emit_refresh_all(self):
+        if callable(self.on_refresh_all):
+            self.on_refresh_all()
+
 
     def _build_ui(self):
         # Barra superior: filtros/búsqueda/acciones
@@ -218,6 +225,8 @@ class TabCobranza:
             self.refrescar()
         else:
             messagebox.showwarning("Atención", "No se realizaron cambios.")
+        self._emit_refresh_all()
+
 
     def _deshacer_pago(self):
         pid = self._get_selected_id()
@@ -236,3 +245,5 @@ class TabCobranza:
             self.refrescar()
         else:
             messagebox.showinfo("Info", "No se realizaron cambios.")
+        self._emit_refresh_all()
+

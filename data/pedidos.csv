@@ -1,7 +1,6 @@
 id_pedido,fecha,cliente,total,estado,descuento,pagado,descuento_pago_pct,total_cobro
-20251024012941,2025-10-24 01:29,Alvaro,343.00,Parcial,1,0,,
-20251024013658,2025-10-24 01:36,Jorge,75.35,Completado,0,0,,
-202510-24013659,2025-10-24 21:29,Pablo Perez Palafox,1001.00,Completado,0,0,,
-202510-24013660,2025-10-24 21:30,Jorge Pérez Jimenez,800.02,Completado,0,1,10.00,720.02
-202510-24013661,2025-10-28 00:35,Christian Omar Castor Sanchez,411.00,Pendiente,0,0,,
-202510-24013662,2025-10-28 14:27,Ramiro Bravo,2743.60,Pendiente,0,0,,
+202510-001,2025-10-28 16:46,Christian,78.65,Completado,0,0,,
+202510-002,2025-10-28 17:16,Jorge Pérez Palafox,698.40,Completado,0,0,,
+202510-003,2025-10-28 17:17,Álvaro Pérez Palafox,236.05,Completado,0,0,,
+202510-004,2025-10-28 17:18,Pablo Pérez Palafox,456.70,Pendiente,1,0,,
+202510-005,2025-10-28 17:55,Ramiro Bravo,1204.40,Parcial,0,0,,
