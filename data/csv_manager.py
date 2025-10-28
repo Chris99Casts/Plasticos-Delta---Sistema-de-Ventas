@@ -76,33 +76,42 @@ def ensure_files():
             writer = csv.writer(f)
             writer.writerow(DETALLE_FIELDS)
 
-def generar_id_pedido_ym(dt: datetime | None = None) -> str:
+def generar_id_pedido_ym(now: datetime | None = None) -> str:
     """
-    Genera un folio con formato YYYYMM-###, donde ### es un consecutivo por mes.
-    Ejemplo: 202510-001, 202510-002, ... y al cambiar de mes reinicia a 001.
+    Devuelve un folio con formato: YYYYMM-### (ej. 202510-001).
+    Busca el máximo consecutivo del mes en PEDIDOS_PATH y suma 1.
+    Reinicia el consecutivo al cambiar de mes.
     """
-    if dt is None:
-        dt = datetime.now()
-    prefix = dt.strftime("%Y%m")  # YYYYMM
+    now = now or datetime.now()
+    yyyymm = now.strftime("%Y%m")  # p. ej. '202510'
 
-    ensure_files()  # Asegura que existe el CSV
+    # Asegura archivo
+    if not os.path.exists(PEDIDOS_PATH):
+        with open(PEDIDOS_PATH, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["id_pedido", "fecha", "cliente", "total", "estado", "descuento"])
+
     max_seq = 0
-    if os.path.exists(PEDIDOS_PATH):
+    try:
         with open(PEDIDOS_PATH, newline="", encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
+            reader = csv.DictReader(f)
+            for row in reader:
                 folio = (row.get("id_pedido") or "").strip()
-                if not folio.startswith(prefix + "-"):
+                # Debe empezar con YYYYMM-
+                if not folio.startswith(yyyymm + "-"):
                     continue
-                # toma la parte numérica luego del guión
+                # lo que sigue debería ser el número
                 try:
                     seq = int(folio.split("-")[-1])
                     if seq > max_seq:
                         max_seq = seq
                 except Exception:
                     pass
+    except FileNotFoundError:
+        pass
 
-    siguiente = max_seq + 1
-    return f"{prefix}-{siguiente:03d}"
+    next_seq = max_seq + 1
+    return f"{yyyymm}-{next_seq:03d}"
 
 # ---------------- productos ----------------
 def cargar_productos():
