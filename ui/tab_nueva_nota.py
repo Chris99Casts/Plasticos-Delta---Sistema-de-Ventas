@@ -328,62 +328,92 @@ class TabNuevaNota:
 
     # ---------------- Registrar Pedido ----------------------
     def registrar_pedido(self):
+        from datetime import datetime
+        from tkinter import messagebox
+        from data.csv_manager import registrar_pedido as csv_registrar_pedido, generar_id_pedido_ym
+        from ui.pdf_utils import generar_pdf_pedido, abrir_pdf
+
         cliente = (self.cliente.get() or "").strip()
         if not cliente:
-            messagebox.showerror("Error", "Ingrese un cliente.")
+            messagebox.showerror("Error", "Ingresa el nombre del cliente.")
             return
 
+        # Recolectar líneas de la tabla
         items = []
         total = 0.0
         for iid in self.tree.get_children():
-            cantidad, prod, precio, importe = self.tree.item(iid)["values"]
-            p = self._parse_float(precio)
-            imp = self._parse_float(importe)
-            total += imp
-            items.append({
-                "producto": str(prod),
-                "cantidad": int(cantidad),
-                "precio_unitario": f"{p:.2f}",
-                "importe": f"{imp:.2f}"
-            })
+            vals = self.tree.item(iid)["values"]
+            # Esperado: (cantidad, producto, precio, importe)
+            try:
+                cantidad = int(vals[0])
+            except Exception:
+                cantidad = 0
+            producto = str(vals[1] or "")
+            # Normaliza precios/importe (vienen formateados con $ y comas)
+            try:
+                precio_u = float(str(vals[2]).replace("$","").replace(",","").strip() or "0")
+            except Exception:
+                precio_u = 0.0
+            try:
+                importe = float(str(vals[3]).replace("$","").replace(",","").strip() or "0")
+            except Exception:
+                importe = cantidad * precio_u
+
+            if producto and cantidad > 0:
+                items.append({
+                    "producto": producto,
+                    "cantidad": cantidad,
+                    "precio_unitario": f"{precio_u:.2f}",
+                    "importe": f"{importe:.2f}",
+                })
+                total += importe
 
         if not items:
-            messagebox.showerror("Error", "Agregue al menos un producto al pedido.")
+            messagebox.showerror("Error", "Agrega al menos un producto antes de registrar.")
             return
 
-        # Folio mensual compartido
-        if not self._folio_actual:
-            self._folio_actual = generar_id_pedido_ym()
-        id_pedido = self._folio_actual
+        # Folio por año/mes con consecutivo
+        now = datetime.now()
+        id_pedido = generar_id_pedido_ym(now)
+        fecha_str = now.strftime("%Y-%m-%d %H:%M")
+        estado = "Pendiente"
+        desc_flag = "1" if bool(self.descuento.get()) else "0"
 
-        header = {
-            "id_pedido": id_pedido,
-            "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "cliente": cliente,
-            "total": f"{total:.2f}",
-            "estado": "Pendiente",
-            "descuento": "1" if self.descuento.get() else "0",
-        }
-
+        # Guardar encabezado + detalle
         try:
-            registrar_pedido_csv(header, items)
+            csv_registrar_pedido(
+                header={
+                    "id_pedido": id_pedido,
+                    "fecha": fecha_str,
+                    "cliente": cliente,
+                    "total": f"{total:.2f}",
+                    "estado": estado,
+                    "descuento": desc_flag,
+                },
+                items=items
+            )
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo registrar el pedido.\n{e}")
             return
 
-        messagebox.showinfo("Éxito", f"Pedido registrado ({id_pedido}) para {cliente}.")
+        # Aviso y opción de generar PDF
+        if messagebox.askyesno("Registrado", f"Pedido {id_pedido} registrado.\n\n¿Deseas generar la nota (PDF) ahora?"):
+            try:
+                pdf_path = generar_pdf_pedido(
+                    id_pedido=id_pedido,
+                    cliente=cliente,
+                    fecha_str=fecha_str,
+                    items=items,
+                    # Deja que pdf_utils resuelva el logo desde assets si ya lo tienes configurado
+                    qr_kind="QR",
+                )
+                abrir_pdf(pdf_path)
+            except Exception as e:
+                messagebox.showwarning("PDF", f"El pedido se registró, pero no se pudo generar el PDF.\n{e}")
 
-        # Ofrecer generar PDF ahora
-        if messagebox.askyesno("Generar Nota", "¿Deseas generar la Nota en PDF ahora?"):
-            pdf_path = generar_pdf_pedido(
-                id_pedido=id_pedido,
-                cliente=cliente,
-                fecha_str=header["fecha"],
-                items=items,
-                logo_path=self.logo_path,
-                qr_kind="QR",  # o "CODE128"
-            )
-            abrir_pdf(pdf_path)
+        # --- SIEMPRE: dejar lista la pestaña para otra captura ---
+        self._flush_form()
+
 
     # ---------------- Abrir productos.csv -------------------
     def abrir_csv(self):
@@ -432,5 +462,26 @@ class TabNuevaNota:
             # Código de barras Code128
             code = code128.Code128(folio, barHeight=size, barWidth=0.6, humanReadable=False)
             code.drawOn(canvas_obj, x, y)
+
+
+    # --- NUEVO: dejar lista la pestaña para una nueva nota ---
+    def _flush_form(self):
+        # Limpiar tabla
+        for itm in self.tree.get_children():
+            self.tree.delete(itm)
+        # Limpiar campos
+        self.cliente.set("")
+        try:
+            self.descuento.set(False)
+        except Exception:
+            pass
+        self.cantidad_entry.delete(0, "end")
+        self.producto_entry.delete(0, "end")
+        self.precio_entry.delete(0, "end")
+        # Enfocar primer campo
+        try:
+            self.entry_cliente.focus_set()
+        except Exception:
+            pass
 
 
