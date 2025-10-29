@@ -26,11 +26,11 @@ class TabCobranza:
         self._configure_grid()
         self._init_row_tags()
         self.refrescar()
+
     # ------------------- Emitir refresh ----------------------
     def _emit_refresh_all(self):
         if callable(self.on_refresh_all):
             self.on_refresh_all()
-
 
     def _build_ui(self):
         # Barra superior: filtros/búsqueda/acciones
@@ -97,18 +97,24 @@ class TabCobranza:
         self.tree.bind("<Button-3>", self._show_ctx)
         self.tree.bind("<Control-Button-1>", self._show_ctx)
 
+        # Scrollbars (vertical + horizontal)
         sy = ttk.Scrollbar(self.frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sy.set)
 
-        self.tree.grid(row=1, column=0, sticky="nsew", padx=(15,0), pady=(6,12))
-        sy.grid(row=1, column=1, sticky="ns", pady=(6,12))
+        self.hsb = ttk.Scrollbar(self.frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(xscrollcommand=self.hsb.set)
+
+        # Layout (grid)
+        self.tree.grid(row=1, column=0, sticky="nsew", padx=(15,0), pady=(6,0))
+        sy.grid(row=1, column=1, sticky="ns", pady=(6,0))
+        self.hsb.grid(row=2, column=0, sticky="ew", padx=(15,0), pady=(0,12))
 
         # Estado interno
         self._current = None
 
     def _configure_grid(self):
         self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_rowconfigure(1, weight=1)
+        self.frame.grid_rowconfigure(1, weight=1)  # fila de la tabla (crece)
 
     def _init_row_tags(self):
         # Reusa colores de estado de surtido (no pago), y resalta pagado
@@ -139,6 +145,9 @@ class TabCobranza:
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron leer pedidos.\n{e}")
             return []
+
+        # --- NUEVO: excluir cancelados de cobranza ---
+        rows = [r for r in rows if (r.get("estado","").strip().lower() != "cancelado")]
 
         # Filtro por pago
         fp = (self.cmb_pago.get() or "Todos").strip().lower()
@@ -227,7 +236,6 @@ class TabCobranza:
             messagebox.showwarning("Atención", "No se realizaron cambios.")
         self._emit_refresh_all()
 
-
     def _deshacer_pago(self):
         pid = self._get_selected_id()
         if not pid:
@@ -246,4 +254,3 @@ class TabCobranza:
         else:
             messagebox.showinfo("Info", "No se realizaron cambios.")
         self._emit_refresh_all()
-
