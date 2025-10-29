@@ -1,6 +1,6 @@
 import csv, os, re
-from data.paths import PRODUCTOS_PATH, PEDIDOS_PATH, PEDIDOS_DETALLE_PATH
 from datetime import datetime
+from data.paths import PRODUCTOS_PATH, PEDIDOS_PATH, PEDIDOS_DETALLE_PATH
 
 # ---------------- util numérico ----------------
 def _to_std_number(num_str: str) -> str:
@@ -43,53 +43,19 @@ def _to_std_number(num_str: str) -> str:
             return s
     return s
 
-# Campos del encabezado de pedidos (con cobranza)
+# ---------------- Esquemas ----------------
 PEDIDOS_FIELDS = [
     "id_pedido", "fecha", "cliente", "total", "estado",
-    "descuento",             # 0/1 indica si se usaron precios con descuento al cotizar
+    "descuento",             # 0/1: precios con descuento al capturar
     "pagado",                # 0/1
-    "descuento_pago_pct",    # porcentaje aplicado en cobranza
-    "total_cobro",           # total con descuento de cobranza aplicado
+    "descuento_pago_pct",    # % aplicado en cobranza
+    "total_cobro",           # total con descuento de cobranza
 ]
 
-DETALLE_FIELDS = ["id_linea", "id_pedido", "producto", "cantidad",
-                  "cantidad_completada", "precio_unitario", "importe"]
-
-# ---------- helpers dinámicos de encabezado PEDIDOS ----------
-def _leer_pedidos_y_campos():
-    """Devuelve (rows, fieldnames) de PEDIDOS.csv respetando su header actual."""
-    if not os.path.exists(PEDIDOS_PATH) or os.path.getsize(PEDIDOS_PATH) == 0:
-        return [], PEDIDOS_FIELDS[:]
-    with open(PEDIDOS_PATH, newline="", encoding="utf-8-sig") as f:
-        rdr = csv.DictReader(f)
-        rows = list(rdr)
-        fields = list(rdr.fieldnames or []) or PEDIDOS_FIELDS[:]
-    return rows, fields
-
-def _header_union(base_fields, rows):
-    """Une los fieldnames con las claves presentes en rows."""
-    fields = list(base_fields)
-    for r in rows:
-        for k in r.keys():
-            if k not in fields:
-                fields.append(k)
-    # asegurar 'descuento' al menos
-    if "descuento" not in fields:
-        fields.append("descuento")
-    return fields
-
-def _write_pedidos(rows):
-    """Escribe PEDIDOS.csv respetando/extendiendo el header actual."""
-    _, current_fields = _leer_pedidos_y_campos()
-    fields = _header_union(current_fields, rows)
-    with open(PEDIDOS_PATH, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        for r in rows:
-            # completa claves faltantes
-            for k in fields:
-                r.setdefault(k, "")
-            w.writerow(r)
+DETALLE_FIELDS = [
+    "id_linea", "id_pedido", "producto", "cantidad",
+    "cantidad_completada", "precio_unitario", "importe"
+]
 
 # ---------------- archivos base ----------------
 def ensure_files():
@@ -100,52 +66,38 @@ def ensure_files():
             writer.writerow(["producto", "precio", "precio_desc"])
             writer.writerow(["Tubo PVC 1/2", "12.50", "10.80"])
 
-    # encabezados de pedidos (con columnas nuevas)
+    # encabezados
     if not os.path.exists(PEDIDOS_PATH):
         with open(PEDIDOS_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(PEDIDOS_FIELDS)
 
-    # detalle de pedidos
+    # detalle
     if not os.path.exists(PEDIDOS_DETALLE_PATH):
         with open(PEDIDOS_DETALLE_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(DETALLE_FIELDS)
 
 def generar_id_pedido_ym(now: datetime | None = None) -> str:
-    """
-    Devuelve un folio con formato: YYYYMM-### (ej. 202510-001).
-    Busca el máximo consecutivo del mes en PEDIDOS_PATH y suma 1.
-    Reinicia el consecutivo al cambiar de mes.
-    """
     now = now or datetime.now()
-    yyyymm = now.strftime("%Y%m")  # p. ej. '202510'
-
-    # Asegura archivo con header completo
+    yyyymm = now.strftime("%Y%m")
     if not os.path.exists(PEDIDOS_PATH):
-        with open(PEDIDOS_PATH, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(PEDIDOS_FIELDS)
+        ensure_files()
 
     max_seq = 0
-    try:
-        with open(PEDIDOS_PATH, newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                folio = (row.get("id_pedido") or "").strip()
-                if not folio.startswith(yyyymm + "-"):
-                    continue
-                try:
-                    seq = int(folio.split("-")[-1])
-                    if seq > max_seq:
-                        max_seq = seq
-                except Exception:
-                    pass
-    except FileNotFoundError:
-        pass
-
-    next_seq = max_seq + 1
-    return f"{yyyymm}-{next_seq:03d}"
+    with open(PEDIDOS_PATH, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            folio = (row.get("id_pedido") or "").strip()
+            if not folio.startswith(yyyymm + "-"):
+                continue
+            try:
+                seq = int(folio.split("-")[-1])
+                if seq > max_seq:
+                    max_seq = seq
+            except Exception:
+                pass
+    return f"{yyyymm}-{(max_seq+1):03d}"
 
 # ---------------- productos ----------------
 def cargar_productos():
@@ -184,7 +136,26 @@ def cargar_productos():
         f"No se pudo leer {PRODUCTOS_PATH} con {candidate_encodings}. Último error: {last_err}"
     )
 
-# ---------------- pedidos (encabezado + detalle) ----------------
+# ---------------- helpers de IO ----------------
+def _leer_todas_lineas():
+    if not os.path.exists(PEDIDOS_DETALLE_PATH):
+        ensure_files()
+    with open(PEDIDOS_DETALLE_PATH, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+def _escribir_todas_lineas(rows):
+    with open(PEDIDOS_DETALLE_PATH, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=DETALLE_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+def _write_pedidos(rows):
+    with open(PEDIDOS_PATH, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+# ---------------- CRUD de pedidos ----------------
 def registrar_pedido(header: dict, items: list[dict]):
     """
     header: {id_pedido, fecha, cliente, total, estado, descuento(0/1)}
@@ -196,19 +167,20 @@ def registrar_pedido(header: dict, items: list[dict]):
         "fecha": header["fecha"],
         "cliente": header["cliente"],
         "total": header["total"],
-        "estado": header["estado"],
+        "estado": header["estado"],  # Pendiente
         "descuento": "1" if descuento in ("1", "true", "True", "si", "sí") else "0",
         "pagado": "0",
         "descuento_pago_pct": "",
         "total_cobro": "",
     }
 
-    # Guarda encabezado respetando/extendiendo header actual
-    rows, fields = _leer_pedidos_y_campos()
-    rows.append(header_out)
-    _write_pedidos(rows)
+    file_exists = os.path.exists(PEDIDOS_PATH) and os.path.getsize(PEDIDOS_PATH) > 0
+    with open(PEDIDOS_PATH, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS)
+        if not file_exists:
+            w.writeheader()
+        w.writerow(header_out)
 
-    # Detalle
     file_exists = os.path.exists(PEDIDOS_DETALLE_PATH) and os.path.getsize(PEDIDOS_DETALLE_PATH) > 0
     with open(PEDIDOS_DETALLE_PATH, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=DETALLE_FIELDS)
@@ -230,7 +202,6 @@ def registrar_pedido(header: dict, items: list[dict]):
             })
 
 def leer_pedidos():
-    """Lee pedidos y garantiza claves faltantes por compatibilidad hacia atrás."""
     if not os.path.exists(PEDIDOS_PATH):
         ensure_files()
     with open(PEDIDOS_PATH, newline="", encoding="utf-8-sig") as f:
@@ -238,11 +209,11 @@ def leer_pedidos():
     norm = []
     for r in rows:
         rr = { (k or "").strip(): (v or "").strip() for k, v in r.items() }
-        # defaults
         if "descuento" not in rr: rr["descuento"] = "0"
         if "pagado" not in rr: rr["pagado"] = "0"
         if "descuento_pago_pct" not in rr: rr["descuento_pago_pct"] = ""
         if "total_cobro" not in rr: rr["total_cobro"] = ""
+        if "estado" not in rr: rr["estado"] = "Pendiente"
         norm.append(rr)
     return norm
 
@@ -269,18 +240,6 @@ def leer_items_por_pedido(id_pedido: str):
         })
     return fixed
 
-def _leer_todas_lineas():
-    if not os.path.exists(PEDIDOS_DETALLE_PATH):
-        ensure_files()
-    with open(PEDIDOS_DETALLE_PATH, newline="", encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))
-
-def _escribir_todas_lineas(rows):
-    with open(PEDIDOS_DETALLE_PATH, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=DETALLE_FIELDS)
-        w.writeheader()
-        w.writerows(rows)
-
 def actualizar_cantidad_completada(id_linea: str, nueva_cantidad: int):
     rows = _leer_todas_lineas()
     actualizado = False
@@ -298,7 +257,17 @@ def actualizar_cantidad_completada(id_linea: str, nueva_cantidad: int):
     return actualizado
 
 def recalc_estado_pedido(id_pedido: str):
+    """No recalcula si el pedido está Cancelado (respeta el estado)."""
     id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    estado_actual = None
+    for p in pedidos:
+        if p["id_pedido"] == id_pedido:
+            estado_actual = p.get("estado","")
+            break
+    if estado_actual and estado_actual.lower() == "cancelado":
+        return
+
     items = leer_items_por_pedido(id_pedido)
     if not items:
         return
@@ -306,7 +275,6 @@ def recalc_estado_pedido(id_pedido: str):
     all_full = all(int(i["cantidad_completada"]) >= int(i["cantidad"]) for i in items)
     estado = "Completado" if all_full else ("Pendiente" if all_zero else "Parcial")
 
-    pedidos = leer_pedidos()
     for p in pedidos:
         if p["id_pedido"] == id_pedido:
             p["estado"] = estado
@@ -332,7 +300,6 @@ def actualizar_cantidades_completadas_batch(updates: list[tuple[str, int]]):
     res = {}
     for pid in pedidos_afectados:
         recalc_estado_pedido(pid)
-        # devuelve estado nuevo por pedido
         for p in leer_pedidos():
             if p["id_pedido"] == pid:
                 res[pid] = p.get("estado","")
@@ -341,13 +308,13 @@ def actualizar_cantidades_completadas_batch(updates: list[tuple[str, int]]):
 
 def actualizar_pedido_completo(id_pedido: str, cliente: str, fecha: str, nuevas_lineas: list[dict]):
     """
-    (sin cambios en firma) — preserva 'descuento' del encabezado y cualquier columna extra.
-    Ignora cualquier línea con cantidad <= 0.
+    Preserva 'descuento' y columnas de cobranza.
+    Ignora cualquier línea con cantidad <= 0 (se elimina del detalle).
     """
     id_pedido = str(id_pedido)
 
-    # --- FILTRO ANTICIPADO: descarta líneas de cantidad <= 0 ---
-    _filtradas = []
+    # 1) Filtrado anticipado de líneas (cant > 0)
+    filtradas = []
     for it in (nuevas_lineas or []):
         try:
             c = int(it.get("cantidad") or 0)
@@ -355,10 +322,10 @@ def actualizar_pedido_completo(id_pedido: str, cliente: str, fecha: str, nuevas_
             c = 0
         if c <= 0:
             continue
-        _filtradas.append(it)
-    nuevas_lineas = _filtradas
+        filtradas.append(it)
+    nuevas_lineas = filtradas
 
-    # --- cargar detalles actuales ---
+    # 2) Cargar detalle
     rows = _leer_todas_lineas()
     actuales = [r for r in rows if str(r.get("id_pedido")) == id_pedido]
     otras = [r for r in rows if str(r.get("id_pedido")) != id_pedido]
@@ -398,7 +365,8 @@ def actualizar_pedido_completo(id_pedido: str, cliente: str, fecha: str, nuevas_
 
     _escribir_todas_lineas(otras + nuevos_rows)
 
-    # --- recalcular total / estado y preservar 'descuento' + extras ---
+    # 3) Recalcular total/estado preservando campos
+    pedidos = leer_pedidos()
     total = 0.0
     all_zero, all_full = True, True
     for r in nuevos_rows:
@@ -410,27 +378,64 @@ def actualizar_pedido_completo(id_pedido: str, cliente: str, fecha: str, nuevas_
         cc = int(r.get("cantidad_completada") or 0)
         if cc > 0: all_zero = False
         if cc < c: all_full = False
+
     estado = "Completado" if nuevos_rows and all_full else ("Pendiente" if (not nuevos_rows or all_zero) else "Parcial")
 
-    pedidos, campos = _leer_pedidos_y_campos()
     for p in pedidos:
-        if p.get("id_pedido") == id_pedido:
-            p["cliente"] = cliente
-            p["fecha"] = fecha
-            p["total"] = f"{total:.2f}"
-            p["estado"] = estado
-            # preservar descuento y cualquier columna extra tal como estén
-            if "descuento" not in p:
-                p["descuento"] = "0"
-            break
-
+        if p["id_pedido"] == id_pedido:
+            # preserva columnas adicionales
+            descuento_flag = p.get("descuento", "0")
+            pagado = p.get("pagado", "0")
+            d_pct  = p.get("descuento_pago_pct", "")
+            tot_c  = p.get("total_cobro", "")
+            p.update({
+                "cliente": cliente,
+                "fecha": fecha,
+                "total": f"{total:.2f}",
+                "estado": estado,
+                "descuento": descuento_flag,
+                "pagado": pagado,
+                "descuento_pago_pct": d_pct,
+                "total_cobro": tot_c,
+            })
     _write_pedidos(pedidos)
     return True
 
+# -------- Cancelación --------
+def cancelar_pedido(id_pedido: str) -> bool:
+    """
+    Cancela el pedido (estado='Cancelado'), pone cantidad_completada=0 en TODAS sus líneas,
+    y limpia el pago (pagado=0). Mantiene importes y total (histórico).
+    """
+    id_pedido = str(id_pedido)
+    changed = False
+
+    # 1) Encabezado
+    pedidos = leer_pedidos()
+    for p in pedidos:
+        if p.get("id_pedido") == id_pedido:
+            p["estado"] = "Cancelado"
+            p["pagado"] = "0"
+            # mantenemos total como histórico; no tocamos total_cobro/desc_pct
+            changed = True
+            break
+    if changed:
+        _write_pedidos(pedidos)
+
+    # 2) Detalle: poner completados=0
+    det = _leer_todas_lineas()
+    touched = False
+    for r in det:
+        if str(r.get("id_pedido")) == id_pedido:
+            r["cantidad_completada"] = "0"
+            touched = True
+    if touched:
+        _escribir_todas_lineas(det)
+
+    return changed
 
 # -------- Cobranza --------
 def marcar_pagado(id_pedido: str, descuento_pct: float = 0.0):
-    """Marca un pedido como pagado, aplica descuento de cobranza %, y calcula total_cobro."""
     id_pedido = str(id_pedido)
     pedidos = leer_pedidos()
     ok = False; total_cobro_val = 0.0
@@ -452,7 +457,6 @@ def marcar_pagado(id_pedido: str, descuento_pct: float = 0.0):
     return ok, total_cobro_val
 
 def deshacer_pago(id_pedido: str):
-    """Revierte el pago: pagado=0 y borra descuento de cobranza / total_cobro."""
     id_pedido = str(id_pedido)
     pedidos = leer_pedidos()
     ok = False
@@ -466,25 +470,3 @@ def deshacer_pago(id_pedido: str):
     if ok:
         _write_pedidos(pedidos)
     return ok
-
-def eliminar_pedido(id_pedido: str) -> bool:
-    """Elimina encabezado y detalle del pedido."""
-    id_pedido = str(id_pedido)
-    changed = False
-    if os.path.exists(PEDIDOS_PATH):
-        rows = leer_pedidos()
-        new_rows = [r for r in rows if r.get("id_pedido") != id_pedido]
-        if len(new_rows) != len(rows):
-            _write_pedidos(new_rows)
-            changed = True
-    if os.path.exists(PEDIDOS_DETALLE_PATH):
-        with open(PEDIDOS_DETALLE_PATH, newline="", encoding="utf-8-sig") as f:
-            det = list(csv.DictReader(f))
-        new_det = [r for r in det if r.get("id_pedido") != id_pedido]
-        if len(new_det) != len(det):
-            with open(PEDIDOS_DETALLE_PATH, "w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=DETALLE_FIELDS)
-                w.writeheader()
-                w.writerows(new_det)
-            changed = True
-    return changed

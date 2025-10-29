@@ -1,5 +1,5 @@
 id_pedido,fecha,cliente,total,estado,descuento,pagado,descuento_pago_pct,total_cobro
-202510-001,2025-10-28 16:46,Christian,78.65,Completado,0,0,,
+202510-001,2025-10-28 16:46,Christian,78.65,Cancelado,0,0,,
 202510-002,2025-10-28 17:16,Jorge Pérez Palafox,698.40,Completado,0,0,,
 202510-003,2025-10-28 17:17,Álvaro Pérez Palafox,236.05,Completado,0,0,,
 202510-004,2025-10-28 17:18,Pablo Pérez Palafox,456.70,Pendiente,1,0,,

@@ -1,5 +1,5 @@
 id_linea,id_pedido,producto,cantidad,cantidad_completada,precio_unitario,importe
-202510-001-1,202510-001,Maceta 8,5,5,15.73,78.65
+202510-001-1,202510-001,Maceta 8,5,0,15.73,78.65
 202510-002-1,202510-002,Maceta 6,5,5,10.96,54.80
 202510-002-2,202510-002,Bote 10 lts c/tapa,10,10,39.78,397.80
 202510-002-3,202510-002,Bandeja Chica,20,20,12.29,245.80
