@@ -1,6 +1,7 @@
 import csv, os, re
 from datetime import datetime
-from data.paths import PRODUCTOS_PATH, PEDIDOS_PATH, PEDIDOS_DETALLE_PATH
+from data.paths import PRODUCTOS_PATH, PEDIDOS_PATH, PEDIDOS_DETALLE_PATH, CLIENTES_PATH
+
 
 # ---------------- util numérico ----------------
 def _to_std_number(num_str: str) -> str:
@@ -77,6 +78,14 @@ def ensure_files():
         with open(PEDIDOS_DETALLE_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(DETALLE_FIELDS)
+    
+    # clientes
+    if not os.path.exists(CLIENTES_PATH):
+        with open(CLIENTES_PATH, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["id_cliente","nombre","descuento"])  # descuento: 0/1
+            w.writerow(["C0001","Cliente Demo Sin Desc", "0"])
+            w.writerow(["C0002","Cliente Demo Con Desc", "1"])
 
 def generar_id_pedido_ym(now: datetime | None = None) -> str:
     now = now or datetime.now()
@@ -470,3 +479,48 @@ def deshacer_pago(id_pedido: str):
     if ok:
         _write_pedidos(pedidos)
     return ok
+
+def cargar_clientes():
+    """
+    Devuelve lista de dicts: {id_cliente, nombre, descuento('0'/'1')}
+    Lee con detección de delimitador y encoding como cargar_productos().
+    """
+    candidate_encodings = ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
+    last_err = None
+    for enc in candidate_encodings:
+        try:
+            with open(CLIENTES_PATH, "r", newline="", encoding=enc, errors="strict") as f:
+                sample = f.read(4096); f.seek(0)
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;|\t")
+                except Exception:
+                    dialect = csv.excel; dialect.delimiter = ","
+                rows = list(csv.DictReader(f, dialect=dialect))
+        except Exception as e:
+            last_err = e; continue
+
+        out = []
+        for r in rows:
+            rr = {(k or "").strip().lower(): (v or "").strip() for k,v in r.items()}
+            out.append({
+                "id_cliente": rr.get("id_cliente",""),
+                "nombre": rr.get("nombre",""),
+                "descuento": "1" if (rr.get("descuento","").lower() in ("1","true","sí","si","y","yes")) else "0",
+            })
+        return out
+    raise UnicodeDecodeError(f"No se pudo leer {CLIENTES_PATH} con {candidate_encodings}. Último error: {last_err}")
+
+def buscar_clientes(texto: str):
+    """
+    Búsqueda simple por subcadena en id_cliente o nombre (case-insensitive).
+    Devuelve lista de dicts como cargar_clientes().
+    """
+    q = (texto or "").strip().lower()
+    if not q:
+        return []
+    data = cargar_clientes()
+    res = []
+    for c in data:
+        if q in (c["id_cliente"] or "").lower() or q in (c["nombre"] or "").lower():
+            res.append(c)
+    return res

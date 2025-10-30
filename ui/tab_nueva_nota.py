@@ -21,6 +21,8 @@ from data.csv_manager import (
     cargar_productos,
     registrar_pedido as registrar_pedido_csv,
     generar_id_pedido_ym,
+    cargar_clientes,
+    buscar_clientes, 
 )
 
 NOTAS_DIR = os.path.join(os.getcwd(), "Notas")
@@ -50,6 +52,9 @@ class TabNuevaNota:
         self.cliente = tk.StringVar()
         self.descuento = tk.BooleanVar(value=False)
         self.producto_var = tk.StringVar()
+        self.cliente_id = None            # guarda el ID del cliente elegido
+        self.cliente_tiene_desc = False   # sombra interna para claridad
+
 
         self.logo_path = "logo.png"
         os.makedirs(NOTAS_DIR, exist_ok=True)
@@ -58,6 +63,8 @@ class TabNuevaNota:
         # Cargar catálogo
         self.productos_data = self._cargar_catalogo()
         self.nombres_productos = [p["producto"] for p in self.productos_data]
+        self.clientes_data = cargar_clientes()
+
 
         self.crear_ui()
 # ------------------- Emitir refresh ----------------------        
@@ -69,32 +76,41 @@ class TabNuevaNota:
     # ------------------------- UI -------------------------
     def crear_ui(self):
         # Fila 0
-        ttk.Label(self.frame, text="Cliente:", style=self.label_style)\
+        ttk.Label(self.frame, text="Cliente (ID o Nombre):", style=self.label_style)\
             .grid(row=0, column=0, padx=10, pady=10, sticky="e")
         self.entry_cliente = ttk.Entry(self.frame, textvariable=self.cliente, width=40, style=self.entry_style)
         self.entry_cliente.grid(row=0, column=1, columnspan=3, pady=10, sticky="w")
+        self.entry_cliente.bind("<KeyRelease>", self.autocompletar_cliente)   # <--- NUEVO
 
-        self.chk_desc = ttk.Checkbutton(self.frame, text="Cliente con Descuento",
-                                        variable=self.descuento, command=self.actualizar_precio,
-                                        style=self.check_style)
-        self.chk_desc.grid(row=0, column=5, padx=10, sticky="w")
+        # Descuento
+        self.lbl_desc = ttk.Label(self.frame, text="Desc.: —", style=self.label_style)
+        self.lbl_desc.grid(row=0, column=5, padx=10, sticky="w")
+
+        # Lista de autocompletado clientes
+        self.lista_sugerencias_cliente = tk.Listbox(self.frame, height=5, bg="#2d2d2d", fg="white")
+        self.lista_sugerencias_cliente.grid(row=1, column=1, columnspan=3, padx=10, sticky="w")
+        self.lista_sugerencias_cliente.bind("<<ListboxSelect>>", self.seleccionar_cliente)
+        self.lista_sugerencias_cliente.grid_remove()
+
+
+       
 
         # Fila 1
         ttk.Label(self.frame, text="Cantidad:", style=self.label_style)\
-            .grid(row=1, column=0, padx=10, pady=10, sticky="e")
+            .grid(row=2, column=0, padx=10, pady=10, sticky="e")
         self.cantidad_entry = ttk.Entry(self.frame, width=10, style=self.entry_style)
-        self.cantidad_entry.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+        self.cantidad_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
 
         ttk.Label(self.frame, text="Producto:", style=self.label_style)\
-            .grid(row=1, column=2, padx=10, pady=10, sticky="e")
+            .grid(row=2, column=2, padx=10, pady=10, sticky="e")
         self.producto_entry = ttk.Entry(self.frame, textvariable=self.producto_var, width=30, style=self.entry_style)
-        self.producto_entry.grid(row=1, column=3, padx=10, pady=10, sticky="w")
+        self.producto_entry.grid(row=2, column=3, padx=10, pady=10, sticky="w")
         self.producto_entry.bind("<KeyRelease>", self.autocompletar_producto)
 
         ttk.Label(self.frame, text="Precio Unitario:", style=self.label_style)\
-            .grid(row=1, column=4, padx=10, pady=10, sticky="e")
+            .grid(row=2, column=4, padx=10, pady=10, sticky="e")
         self.precio_entry = ttk.Entry(self.frame, width=10, style=self.entry_style)
-        self.precio_entry.grid(row=1, column=5, padx=10, pady=10, sticky="w")
+        self.precio_entry.grid(row=2, column=5, padx=10, pady=10, sticky="w")
 
         self.btn_agregar = ttk.Button(self.frame, text="Agregar", command=self.agregar_producto, style=self.button_style)
         self.btn_agregar.grid(row=1, column=6, padx=10, pady=10)
@@ -496,5 +512,59 @@ class TabNuevaNota:
             self.entry_cliente.focus_set()
         except Exception:
             pass
+
+        self.cliente_id = None
+        self.cliente_tiene_desc = False
+        try:
+            self.lbl_desc.config(text="Desc.: —")
+        except Exception:
+            pass
+    
+    def autocompletar_cliente(self, event=None):
+        txt = (self.cliente.get() or "").strip()
+        if not txt:
+            self.lista_sugerencias_cliente.grid_remove()
+            # si el usuario borró, limpia selección/flag
+            self.cliente_id = None
+            self.cliente_tiene_desc = False
+            self.descuento.set(False)
+            self.lbl_desc.config(text="Desc.: —")
+            self.actualizar_precio()
+            return
+        matches = buscar_clientes(txt)
+        self.lista_sugerencias_cliente.delete(0, tk.END)
+        # Muestra "ID - Nombre"
+        for c in matches[:50]:
+            self.lista_sugerencias_cliente.insert(tk.END, f"{c['id_cliente']} - {c['nombre']}")
+        if matches:
+            self.lista_sugerencias_cliente.grid()
+        else:
+            self.lista_sugerencias_cliente.grid_remove()
+
+    def seleccionar_cliente(self, event=None):
+        sel = self.lista_sugerencias_cliente.curselection()
+        if not sel:
+            return
+        display = self.lista_sugerencias_cliente.get(sel[0])  # "ID - Nombre"
+        self.cliente.set(display)
+        self.lista_sugerencias_cliente.grid_remove()
+        # Resolver el cliente exacto
+        try:
+            cid = display.split(" - ", 1)[0].strip()
+        except:
+            cid = display.strip()
+        # Busca en data para jalar el flag de descuento
+        elegido = None
+        for c in (self.clientes_data or []):
+            if c.get("id_cliente") == cid:
+                elegido = c; break
+        tiene_desc = (elegido and str(elegido.get("descuento","0")) == "1")
+        self.cliente_id = cid
+        self.cliente_tiene_desc = bool(tiene_desc)
+        # Actualiza el BooleanVar que ya usa tu lógica de precios
+        self.descuento.set(self.cliente_tiene_desc)
+        self.lbl_desc.config(text=f"Desc.: {'Sí' if self.cliente_tiene_desc else 'No'}")
+        self.actualizar_precio()  # refresca P.Unit del producto seleccionado (si hubiera)
+
 
 

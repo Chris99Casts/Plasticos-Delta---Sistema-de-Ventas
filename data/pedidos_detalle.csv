@@ -9,4 +9,7 @@ id_linea,id_pedido,producto,cantidad,cantidad_completada,precio_unitario,importe
 202510-003-2,202510-003,Bandeja Chica,15,15,12.29,184.35
 202510-005-1,202510-005,Batidor 1,20,0,3.66,73.20
 202510-005-2,202510-005,Bote 3 lts c/tapa,50,0,21.31,1065.50
-202510-005-3,202510-005,Molcajete chico colores emb,15,15,4.38,65.70
+202510-005-3,202510-005,Molcajete chico colores emb,15,0,4.38,65.70
+202510-006-1,202510-006,Cubeta redonda c/pico,10,10,23.47,234.70
+202510-006-3,202510-006,Maceta Colgante,30,30,15.56,466.80
+202510-007-1,202510-007,Maceta 4,10,0,7.29,72.90

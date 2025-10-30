@@ -294,10 +294,62 @@ class TabPedidos:
 
     # -------- Editor masivo / Editor pedido (sin cambios aquí) --------
     def _abrir_editor_masivo(self):
-        messagebox.showinfo("Info", "Editor masivo no incluido en este fragmento (sin cambios).")
+        iid = self.tree_pedidos.selection()
+        if not iid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+        vals = self.tree_pedidos.item(iid[0])["values"]
+        if not vals:
+            return
+        id_pedido = str(vals[0])
+
+        try:
+            items = leer_items_por_pedido(id_pedido)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron leer las líneas.\n{e}")
+            return
+
+        def _saved():
+            self.refrescar()
+            self._emit_refresh_all()
+
+        # Abre la ventana de edición de cantidades
+        EditorMasivo(
+            self.frame, id_pedido, items, on_saved=_saved,
+            frame_style=self.frame_style, button_style=self.button_style, label_style=self.label_style
+        )
 
     def _abrir_editor_pedido(self):
-        messagebox.showinfo("Info", "Editor de pedido no incluido en este fragmento (sin cambios).")
+        iid = self.tree_pedidos.selection()
+        if not iid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+        vals = self.tree_pedidos.item(iid[0])["values"]
+        if not vals:
+            return
+
+        # Columnas: ("id_pedido", "fecha", "cliente", "total", "estado", "descuento")
+        id_pedido = str(vals[0])
+        fecha     = str(vals[1] or "")
+        cliente   = str(vals[2] or "")
+        desc_flag = str(vals[5] or "").strip().lower() in ("1", "true", "sí", "si", "y", "yes")
+
+        try:
+            items = leer_items_por_pedido(id_pedido)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron leer las líneas del pedido.\n{e}")
+            return
+
+        def _saved():
+            self.refrescar()
+            self._emit_refresh_all()
+
+        # Abre la ventana de edición completa (producto, cantidad, precio)
+        EditorPedido(
+            self.frame, id_pedido, cliente, fecha, items, desc_flag,
+            on_saved=_saved,
+            frame_style=self.frame_style, button_style=self.button_style, label_style=self.label_style
+        )
 
     # -------- Generar PDF --------
     def _generar_pdf_pedido_sel(self):
