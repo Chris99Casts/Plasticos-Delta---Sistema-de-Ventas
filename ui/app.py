@@ -4,6 +4,7 @@ from ui.tab_nueva_nota import TabNuevaNota
 from ui.tab_pedidos import TabPedidos
 from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
+from ui.tab_pendientes import TabPendientes
 
 
 class NotaVentaApp:
@@ -87,6 +88,11 @@ class NotaVentaApp:
         )
         notebook.add(self.tab_cobranza.frame, text="Cobranza")
 
+        # Pendientes
+        self.tab_pend = TabPendientes(notebook)
+        notebook.add(self.tab_pend.frame, text="Pendientes")
+
+
 
     # Pantalla completa
     def toggle_fullscreen(self, event=None):
@@ -122,5 +128,10 @@ class NotaVentaApp:
         try:
             if hasattr(self.tab_cobranza, "refrescar"):
                 self.tab_cobranza.refrescar()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.tab_pend, "refrescar"):
+                self.tab_pend.refrescar()
         except Exception:
             pass

@@ -3,7 +3,7 @@ id_linea,id_pedido,producto,cantidad,cantidad_completada,precio_unitario,importe
 202510-002-1,202510-002,Maceta 6,5,5,10.96,54.80
 202510-002-2,202510-002,Bote 10 lts c/tapa,10,10,39.78,397.80
 202510-002-3,202510-002,Bandeja Chica,20,20,12.29,245.80
-202510-004-1,202510-004,Bote 10 lts c/tapa,10,0,35.80,358.00
+202510-004-1,202510-004,Bote 10 lts c/tapa,10,5,35.80,358.00
 202510-004-2,202510-004,Batidor 1,30,0,3.29,98.70
 202510-003-1,202510-003,Plato Taquero chico,10,10,5.17,51.70
 202510-003-2,202510-003,Bandeja Chica,15,15,12.29,184.35
@@ -13,3 +13,6 @@ id_linea,id_pedido,producto,cantidad,cantidad_completada,precio_unitario,importe
 202510-006-1,202510-006,Cubeta redonda c/pico,10,10,23.47,234.70
 202510-006-3,202510-006,Maceta Colgante,30,30,15.56,466.80
 202510-007-1,202510-007,Maceta 4,10,0,7.29,72.90
+202510-008-1,202510-008,Maceta Colgante,10,5,17.29,172.90
+202510-008-2,202510-008,Molcajete grande negro,15,10,8.18,122.70
+202510-008-3,202510-008,Maceta 8,40,40,15.73,629.20
