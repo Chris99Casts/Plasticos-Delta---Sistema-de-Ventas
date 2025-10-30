@@ -10,4 +10,4 @@ PEDIDOS_DETALLE_PATH = os.path.join(DATA_DIR, "pedidos_detalle.csv")   # <--- im
 LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
 NOTAS_DIR = os.path.join(BASE_DIR, "Notas")
 CLIENTES_PATH = os.path.join(DATA_DIR, "clientes.csv")
-
+PEDIDOS_PAGOS_PATH = os.path.join(DATA_DIR, "pedidos_pagos.csv")

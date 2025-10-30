@@ -1,8 +1,8 @@
 id_pedido,fecha,cliente,total,estado,descuento,pagado,descuento_pago_pct,total_cobro
-202510-001,2025-10-28 16:46,Christian,78.65,Cancelado,0,0,,
-202510-002,2025-10-28 17:16,Jorge Pérez Palafox,698.40,Completado,0,0,,
-202510-003,2025-10-28 17:17,Álvaro Pérez Palafox,236.05,Completado,0,0,,
-202510-004,2025-10-28 17:18,Pablo Pérez Palafox,456.70,Pendiente,1,0,,
-202510-005,2025-10-28 17:55,Ramiro Bravo,1204.40,Cancelado,0,0,,
-202510-006,2025-10-29 18:59,75 - Ramiro Bravo,701.50,Completado,1,0,,
-202510-007,2025-10-29 19:12,Christian Castor,72.90,Pendiente,0,0,,
+202510-001,20/10/2025 16:46,Christian,78.65,Cancelado,0,0,,
+202510-002,28/10/2025 17:16,Jorge Pérez Palafox,698.4,Completado,0,0,,
+202510-003,28/10/2025 17:17,Álvaro Pérez Palafox,236.05,Completado,0,0,,
+202510-004,28/10/2025 17:18,Pablo Pérez Palafox,456.7,Pendiente,1,0,,
+202510-005,28/10/2025 17:55,Ramiro Bravo,1204.4,Cancelado,0,0,,
+202510-006,29/10/2025 18:59,75 - Ramiro Bravo,701.5,Completado,1,1,0,701.5
+202510-007,20/10/2025 19:12,Christian Castor,72.9,Pendiente,0,1,10,65.61
