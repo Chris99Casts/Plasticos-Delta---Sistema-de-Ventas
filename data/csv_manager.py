@@ -36,6 +36,7 @@ def _to_std_number(num_str: str) -> str:
 PEDIDOS_FIELDS = [
     "id_pedido","fecha","cliente","total","estado",
     "descuento","pagado","descuento_pago_pct","total_cobro",
+    "fecha_entrega","exento_minimo_desc",
 ]
 DETALLE_FIELDS = ["id_linea","id_pedido","producto","cantidad","cantidad_completada","precio_unitario","importe"]
 
@@ -102,6 +103,9 @@ def _escribir_todas_lineas(rows):
     with open(PEDIDOS_DETALLE_PATH,"w",newline="",encoding="utf-8") as f:
         w=csv.DictWriter(f, fieldnames=DETALLE_FIELDS); w.writeheader(); w.writerows(rows)
 def _write_pedidos(rows):
+    for p in rows:
+        p.setdefault("fecha_entrega","")
+        p.setdefault("exento_minimo_desc","0")
     with open(PEDIDOS_PATH,"w",newline="",encoding="utf-8") as f:
         w=csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS); w.writeheader(); w.writerows(rows)
 
@@ -113,10 +117,11 @@ def registrar_pedido(header: dict, items: list[dict]):
         "total":header["total"], "estado":header["estado"],
         "descuento":"1" if desc in ("1","true","True","si","sí") else "0",
         "pagado":"0", "descuento_pago_pct":"", "total_cobro":"",
+        "fecha_entrega":"", "exento_minimo_desc":"0",
     }
     file_exists = os.path.exists(PEDIDOS_PATH) and os.path.getsize(PEDIDOS_PATH)>0
     with open(PEDIDOS_PATH,"a",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS); 
+        w=csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS)
         if not file_exists: w.writeheader()
         w.writerow(header_out)
 
@@ -141,6 +146,7 @@ def leer_pedidos():
         rr={ (k or "").strip():(v or "").strip() for k,v in r.items() }
         rr.setdefault("descuento","0"); rr.setdefault("pagado","0")
         rr.setdefault("descuento_pago_pct",""); rr.setdefault("total_cobro",""); rr.setdefault("estado","Pendiente")
+        rr.setdefault("fecha_entrega",""); rr.setdefault("exento_minimo_desc","0")
         norm.append(rr)
     return norm
 
@@ -174,13 +180,17 @@ def recalc_estado_pedido(id_pedido: str):
     for p in pedidos:
         if p["id_pedido"]==id_pedido: estado_actual=p.get("estado",""); break
     if estado_actual and estado_actual.lower()=="cancelado": return
-    items=leer_items_por_pedido(id_pedido); 
+    items=leer_items_por_pedido(id_pedido)
     if not items: return
     all_zero=all(int(i["cantidad_completada"])==0 for i in items)
     all_full=all(int(i["cantidad_completada"])>=int(i["cantidad"]) for i in items)
     estado="Completado" if all_full else ("Pendiente" if all_zero else "Parcial")
+
     for p in pedidos:
-        if p["id_pedido"]==id_pedido: p["estado"]=estado
+        if p["id_pedido"]==id_pedido:
+            p["estado"]=estado
+            if estado=="Completado" and (p.get("fecha_entrega","")== ""):
+                p["fecha_entrega"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     _write_pedidos(pedidos)
 
 def actualizar_cantidades_completadas_batch(updates: list[tuple[str,int]]):
@@ -243,7 +253,8 @@ def actualizar_pedido_completo(id_pedido: str, cliente: str, fecha: str, nuevas_
         if p["id_pedido"]==id_pedido:
             p.update({"cliente":cliente,"fecha":fecha,"total":f"{total:.2f}","estado":estado,
                       "descuento":p.get("descuento","0"),"pagado":p.get("pagado","0"),
-                      "descuento_pago_pct":p.get("descuento_pago_pct",""),"total_cobro":p.get("total_cobro","")})
+                      "descuento_pago_pct":p.get("descuento_pago_pct",""),"total_cobro":p.get("total_cobro",""),
+                      "fecha_entrega":p.get("fecha_entrega",""), "exento_minimo_desc":p.get("exento_minimo_desc","0")})
     _write_pedidos(pedidos); return True
 
 # -------- Cancelación --------
@@ -260,27 +271,6 @@ def cancelar_pedido(id_pedido: str) -> bool:
             r["cantidad_completada"]="0"; touched=True
     if touched: _escribir_todas_lineas(det)
     return changed
-
-# -------- Cobranza (compatibilidad manual) --------
-def marcar_pagado(id_pedido: str, descuento_pct: float = 0.0):
-    id_pedido=str(id_pedido); pedidos=leer_pedidos(); ok=False; total_cobro_val=0.0
-    for p in pedidos:
-        if p.get("id_pedido")==id_pedido:
-            try: total=float(_to_std_number(p.get("total","0")))
-            except: total=0.0
-            pct=max(0.0, min(100.0, float(descuento_pct or 0.0)))
-            total_cobro_val=max(0.0, total*(1.0-pct/100.0))
-            p["pagado"]="1"; p["descuento_pago_pct"]=f"{pct:.2f}"; p["total_cobro"]=f"{total_cobro_val:.2f}"; ok=True; break
-    if ok: _write_pedidos(pedidos)
-    return ok, total_cobro_val
-
-def deshacer_pago(id_pedido: str):
-    id_pedido=str(id_pedido); pedidos=leer_pedidos(); ok=False
-    for p in pedidos:
-        if p.get("id_pedido")==id_pedido:
-            p["pagado"]="0"; p["descuento_pago_pct"]=""; p["total_cobro"]=""; ok=True; break
-    if ok: _write_pedidos(pedidos)
-    return ok
 
 # -------- Clientes --------
 def cargar_clientes():
@@ -318,7 +308,7 @@ def cliente_tiene_descuento_preferencial(id_cliente: str | None, nombre: str | N
         if (id_cliente and rid==id_cliente) or (nombre and nom==nombre): return bool(pref)
     return False
 
-# -------- Abonos + Pronto-pago --------
+# -------- Abonos + Descuento / Pronto-pago --------
 def leer_abonos(id_pedido: str):
     if not os.path.exists(PEDIDOS_PAGOS_PATH): ensure_files()
     with open(PEDIDOS_PAGOS_PATH, newline="", encoding="utf-8-sig") as f:
@@ -336,22 +326,11 @@ def total_abonado(id_pedido: str) -> float:
         except: pass
     return max(0.0, tot)
 
-# ----- Parser robusto de fechas -----
 _FECHA_FORMATOS = [
-    "%Y-%m-%d %H:%M",
-    "%Y-%m-%d %H:%M:%S",
-    "%d/%m/%Y %H:%M",
-    "%d/%m/%Y %H:%M:%S",
-    "%Y/%m/%d %H:%M",
-    "%Y/%m/%d %H:%M:%S",
-    "%d-%m-%Y %H:%M",
-    "%d-%m-%Y %H:%M:%S",
-    "%Y-%m-%d",
-    "%d/%m/%Y",
-    "%Y/%m/%d",
-    "%d-%m-%Y",
+    "%Y-%m-%d %H:%M","%Y-%m-%d %H:%M:%S","%d/%m/%Y %H:%M","%d/%m/%Y %H:%M:%S",
+    "%Y/%m/%d %H:%M","%Y/%m/%d %H:%M:%S","%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S",
+    "%Y-%m-%d","%d/%m/%Y","%Y/%m/%d","%d-%m-%Y",
 ]
-
 def _parse_fecha_multi(fecha_str: str) -> datetime | None:
     s = (fecha_str or "").strip()
     if not s:
@@ -363,12 +342,73 @@ def _parse_fecha_multi(fecha_str: str) -> datetime | None:
             continue
     return None
 
-def _dias_desde(fecha_str: str) -> int:
+def _dias_desde_signed(fecha_str: str):
     dt = _parse_fecha_multi(fecha_str)
     if dt is None:
-        return 9999
-    delta = (datetime.now() - dt).days
-    return delta if delta >= 0 else 9999
+        return None
+    return (datetime.now() - dt).days  # puede ser negativo (entrega futura)
+
+_MINIMO_NOTA = 3500.0
+_PRONTO_PAGO_PCT = 10.0
+
+def set_exento_minimo_desc(id_pedido: str, flag: bool) -> bool:
+    id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    changed = False
+    for p in pedidos:
+        if p.get("id_pedido")==id_pedido:
+            p["exento_minimo_desc"] = "1" if flag else "0"
+            changed = True
+            break
+    if changed:
+        _write_pedidos(pedidos)
+    return changed
+
+def set_fecha_entrega(id_pedido: str, fecha: str | datetime | None) -> bool:
+    id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    changed = False
+    if isinstance(fecha, datetime):
+        dt_new = fecha
+    else:
+        s = (fecha or "").strip()
+        if not s:
+            dt_new = None
+        else:
+            dt_new = _parse_fecha_multi(s)
+            if dt_new is None:
+                raise ValueError("Formato de fecha no válido. Ejemplos: '2025-10-31 14:30', '31/10/2025 14:30', '2025-10-31'.")
+
+    for p in pedidos:
+        if p.get("id_pedido") == id_pedido:
+            if dt_new is not None:
+                dt_ped = _parse_fecha_multi(p.get("fecha",""))
+                if dt_ped is not None and dt_new < dt_ped:
+                    raise ValueError("La fecha de entrega no puede ser anterior a la fecha del pedido.")
+                out = dt_new.strftime("%Y-%m-%d %H:%M")
+            else:
+                out = ""
+            p["fecha_entrega"] = out
+            changed = True
+            break
+
+    if changed:
+        _write_pedidos(pedidos)
+    return changed
+
+def descuento_eligibilidad(id_pedido: str):
+    id_pedido = str(id_pedido)
+    for p in leer_pedidos():
+        if p.get("id_pedido")!=id_pedido: continue
+        pref = (p.get("descuento","0")=="1")
+        try: total = float(_to_std_number(p.get("total","0")) or "0")
+        except: total = 0.0
+        dias = _dias_desde_signed(p.get("fecha_entrega",""))
+        minimo_ok = (total >= _MINIMO_NOTA - 1e-9)
+        exento = (p.get("exento_minimo_desc","0")=="1")
+        elig = (dias is not None) and (0 <= dias <= 7) and (not pref) and (minimo_ok or exento)
+        return {'eligible': bool(elig), 'dias': dias, 'pref': pref, 'minimo_ok': minimo_ok, 'exento': exento}
+    return {'eligible': False, 'dias': None, 'pref': False, 'minimo_ok': False, 'exento': False}
 
 def estado_pago(id_pedido: str):
     pedidos=leer_pedidos()
@@ -385,12 +425,11 @@ def estado_pago(id_pedido: str):
             return "Pago Parcial", abon, objetivo
     return "Pago Pendiente", 0.0, 0.0
 
-def total_cobro_actual(id_pedido: str) -> tuple[float, float, int]:
+def total_cobro_actual(id_pedido: str):
     """
-    Devuelve (objetivo_actual, pct_pronto_pago_aplicado_hoy, dias_transcurridos).
-    Regla:
-      - Si hay 'total_cobro' y el pedido está pagado o tiene abonos => respetar fijo.
-      - En otro caso => calcular dinámico: 10% si 0<=días<=7 y NO preferencial; si no, 0%.
+    (objetivo_actual, pct_aplicado_hoy, dias_desde_entrega|"N/A")
+    - Si hay descuento fijo (descuento_pago_pct no vacío y total_cobro>0), usarlo SIEMPRE.
+    - Si no, calcula dinámico según elegibilidad pronto-pago.
     """
     id_pedido=str(id_pedido); pedidos=leer_pedidos()
     for p in pedidos:
@@ -398,43 +437,33 @@ def total_cobro_actual(id_pedido: str) -> tuple[float, float, int]:
         try: total_pedido=float(_to_std_number(p.get("total","0")) or "0")
         except: total_pedido=0.0
 
-        # Datos actuales
-        dias=_dias_desde(p.get("fecha",""))
+        dias_signed = _dias_desde_signed(p.get("fecha_entrega",""))
+        dias_display = dias_signed if dias_signed is not None else "N/A"
         abonados = total_abonado(id_pedido)
 
-        # ¿Existe un total_cobro 'fijo'?
         try: fijo=float(_to_std_number(p.get("total_cobro") or "0") or 0)
         except: fijo=0.0
-        try: pct_fijo=float(_to_std_number(p.get("descuento_pago_pct") or "0") or 0.0)
+        pct_fijo_txt = (p.get("descuento_pago_pct") or "").strip()
+        try: pct_fijo=float(_to_std_number(pct_fijo_txt or "0") or 0.0)
         except: pct_fijo=0.0
 
-        # Respetar fijo SOLO si ya hubo acción real (pagado o hay abonos)
-        if fijo > 0 and (p.get("pagado","0") == "1" or abonados > 0):
-            return fijo, pct_fijo, dias
+        # NUEVO: si hay descuento fijo establecido, mostrarlo aunque no haya abonos
+        if fijo > 0 and pct_fijo_txt != "":
+            return fijo, pct_fijo, dias_display
 
-        # Cálculo "hoy" (dinámico)
-        es_pref=(p.get("descuento","0")=="1")
-        pronto=0.0
-        if (not es_pref) and (0 <= dias <= 7):
-            pronto=10.0
-        objetivo = total_pedido*(1.0-pronto/100.0)
-        return objetivo, pronto, dias
-    return 0.0, 0.0, 9999
+        el = descuento_eligibilidad(id_pedido)
+        pronto = _PRONTO_PAGO_PCT if el['eligible'] else 0.0
+        objetivo = total_pedido*(1.0 - pronto/100.0)
+        return objetivo, pronto, dias_display
+    return 0.0, 0.0, "N/A"
 
 def registrar_abono(id_pedido: str, monto: float):
-    """
-    Valida:
-      - monto > 0
-      - monto <= saldo actual (objetivo actual - abonado)
-    Si liquida: fija pronto-pago (10% <=7d, no preferencial), total_cobro y 'pagado'.
-    """
     id_pedido=str(id_pedido)
     try: monto=float(monto or 0.0)
     except: monto=-1.0
     if monto<=0.0:
         raise ValueError("El monto debe ser mayor a 0.")
 
-    # Saldo actual protegido
     objetivo_actual, _, _ = total_cobro_actual(id_pedido)
     abonado = total_abonado(id_pedido)
     saldo = max(0.0, objetivo_actual - abonado)
@@ -443,7 +472,6 @@ def registrar_abono(id_pedido: str, monto: float):
     if monto > saldo + 1e-9:
         raise ValueError(f"El abono excede el saldo actual (${saldo:.2f}).")
 
-    # 1) Guardar renglón de pago
     with open(PEDIDOS_PAGOS_PATH,"a",newline="",encoding="utf-8") as f:
         w=csv.DictWriter(f, fieldnames=["id_pago","id_pedido","fecha","monto"])
         if f.tell()==0: w.writeheader()
@@ -451,7 +479,6 @@ def registrar_abono(id_pedido: str, monto: float):
         w.writerow({"id_pago":pid,"id_pedido":id_pedido,"fecha":datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "monto":f"{monto:.2f}"})
 
-    # 2) Recalcular encabezado y pronto-pago al liquidar por primera vez
     pedidos=leer_pedidos()
     for p in pedidos:
         if p.get("id_pedido")!=id_pedido: continue
@@ -464,8 +491,8 @@ def registrar_abono(id_pedido: str, monto: float):
 
         ya_tenia_desc = bool((p.get("descuento_pago_pct") or "").strip())
         if not ya_tenia_desc:
-            es_pref=(p.get("descuento","0")=="1"); dias=_dias_desde(p.get("fecha","")); pronto=0.0
-            if (not es_pref) and (0 <= dias <= 7): pronto=10.0
+            el = descuento_eligibilidad(id_pedido)
+            pronto = _PRONTO_PAGO_PCT if el['eligible'] else 0.0
             objetivo_posible = total_pedido*(1.0-pronto/100.0)
             if abonado_nuevo + 1e-6 >= objetivo_posible:
                 p["descuento_pago_pct"]=f"{pronto:.2f}"; p["total_cobro"]=f"{objetivo_posible:.2f}"
@@ -498,3 +525,82 @@ def eliminar_abono(id_pago: str) -> tuple[bool, str]:
         break
     _write_pedidos(pedidos)
     return True, id_pedido
+
+# -------- Descuento forzado (nuevo) --------
+def aplicar_descuento_forzado(id_pedido: str, pct: float = 10.0) -> bool:
+    """
+    Aplica un descuento fijo (forzado) SOLO si:
+      - el pedido NO está pagado
+      - el cliente NO es preferencial (descuento='1' => preferencial)
+    Ajusta total_cobro y marca pagado si los abonos ya cubren el objetivo.
+    """
+    id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    objetivo = None
+    target = None
+
+    for p in pedidos:
+        if p.get("id_pedido") == id_pedido:
+            target = p
+            break
+    if not target:
+        return False
+
+    # NO permitir forzar si ya está pagado
+    if (target.get("pagado", "0") == "1"):
+        return False
+
+    # NO permitir forzar si es preferencial
+    if (target.get("descuento", "0") == "1"):
+        return False
+
+    # Calcular objetivo con descuento
+    try:
+        total = float(_to_std_number(target.get("total", "0")) or 0.0)
+    except Exception:
+        total = 0.0
+
+    pct_ok = max(0.0, min(100.0, float(pct or 0.0)))
+    objetivo = max(0.0, total * (1.0 - pct_ok/100.0))
+
+    target["descuento_pago_pct"] = f"{pct_ok:.2f}"
+    target["total_cobro"] = f"{objetivo:.2f}"
+
+    # Recalcular pagado en función de abonos
+    abon = total_abonado(id_pedido)
+    target["pagado"] = "1" if (abon + 0.01 >= objetivo) else "0"
+
+    _write_pedidos(pedidos)
+    return True
+
+# -------- Quitar descuento forzado --------
+def quitar_descuento_forzado(id_pedido: str) -> bool:
+    """
+    Quita el descuento forzado (limpia descuento_pago_pct y total_cobro).
+    Recalcula 'pagado' con base en total sin descuento y abonos.
+    """
+    id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    target = None
+    for p in pedidos:
+        if p.get("id_pedido") == id_pedido:
+            target = p
+            break
+    if not target:
+        return False
+
+    # limpiar campos fijos
+    target["descuento_pago_pct"] = ""
+    target["total_cobro"] = ""
+
+    # recalcular pagado vs total normal
+    try:
+        total = float(_to_std_number(target.get("total", "0")) or 0.0)
+    except Exception:
+        total = 0.0
+    abon = total_abonado(id_pedido)
+    target["pagado"] = "1" if (abon + 0.01 >= total) else "0"
+
+    _write_pedidos(pedidos)
+    return True
+

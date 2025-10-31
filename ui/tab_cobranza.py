@@ -1,14 +1,26 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+from datetime import datetime, date
 from data.csv_manager import (
     leer_pedidos,
-    registrar_abono,
-    total_abonado,
-    estado_pago,
-    leer_abonos,
     total_cobro_actual,
-    eliminar_abono,
+    total_abonado,
+    descuento_eligibilidad,
+    set_fecha_entrega,
+    aplicar_descuento_forzado,
+    quitar_descuento_forzado,
+    registrar_abono,
+    leer_abonos,
 )
+
+# Intentar importar tkcalendar (mini calendario)
+_HAS_TKCAL = False
+try:
+    from tkcalendar import DateEntry
+    _HAS_TKCAL = True
+except Exception:
+    _HAS_TKCAL = False
+
 
 class TabCobranza:
     def __init__(self, notebook,
@@ -24,19 +36,19 @@ class TabCobranza:
         self.on_refresh_all = on_refresh_all
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
-
-        self._abono_win = None          # evita ventanas duplicadas
-        self._abono_in_msg = False      # evita shake mientras hay pop-up (messagebox)
+        self._dlg_abono = None   # ventana de abonos (evitar múltiples)
 
         self._build_ui()
         self._configure_grid()
         self._init_row_tags()
         self.refrescar()
 
+    # ------------------- Emitir refresh ----------------------
     def _emit_refresh_all(self):
         if callable(self.on_refresh_all):
             self.on_refresh_all()
 
+    # ------------------- UI principal ------------------------
     def _build_ui(self):
         top = ttk.Frame(self.frame, style=self.frame_style)
         top.grid(row=0, column=0, sticky="ew", padx=10, pady=(8,6))
@@ -48,50 +60,69 @@ class TabCobranza:
         ttk.Label(box, text="Pedido #:", style=self.label_style).pack(side="left", padx=(0,6))
         self.var_buscar = tk.StringVar()
         ent = ttk.Entry(box, textvariable=self.var_buscar, width=18)
-        ent.pack(side="left"); ent.bind("<Return>", lambda e: self.refrescar())
+        ent.pack(side="left")
+        ent.bind("<Return>", lambda e: self.refrescar())
 
-        ttk.Label(box, text="Estado de pago:", style=self.label_style).pack(side="left", padx=(12,6))
-        self.cmb_pago = ttk.Combobox(box, values=["Todos","Pago Pendiente","Pago Parcial","Pago Completo"],
-                                     state="readonly", width=18)
-        self.cmb_pago.set("Todos"); self.cmb_pago.pack(side="left")
-        self.cmb_pago.bind("<<ComboboxSelected>>", lambda e: self.refrescar())
+        ttk.Button(box, text="Buscar", command=self.refrescar, style=self.button_style).pack(side="left", padx=(8,0))
+        ttk.Button(box, text="Limpiar", command=self._limpiar, style=self.button_style).pack(side="left", padx=(6,0))
 
-        ttk.Button(box, text="Buscar", command=self.refrescar, style=self.button_style)\
-            .pack(side="left", padx=(8,0))
-        ttk.Button(box, text="Limpiar", command=self._limpiar, style=self.button_style)\
-            .pack(side="left", padx=(6,0))
-
-        act = ttk.Frame(top, style=self.frame_style)
-        act.grid(row=0, column=1, sticky="e")
-
-        ttk.Button(act, text="Registrar abono…", command=self._registrar_abono, style=self.button_style)\
-            .pack(side="left", padx=(8,0))
-        ttk.Button(act, text="Ver pagos…", command=self._ver_pagos, style=self.button_style)\
-            .pack(side="left", padx=(8,0))
-        ttk.Button(act, text="Refrescar", command=self.refrescar, style=self.button_style)\
-            .pack(side="left", padx=(8,0))
-
-        cols = ("id_pedido","fecha","cliente","total","total_cobro_actual","abonado","saldo_actual","estado_pago")
-        self.tree = ttk.Treeview(self.frame, columns=cols, show="headings", height=18, style=self.tree_style)
+        cols = (
+            "id_pedido","fecha","fecha_entrega","cliente","total",
+            "preferencial","estado_surtido","pagado",
+            "elegible10","dias_entrega",
+            "total_cobro_actual","abonado","saldo",
+            "desc_fijo_pct","total_fijo"
+        )
         headers = {
-            "id_pedido":"ID","fecha":"Fecha","cliente":"Cliente","total":"Total",
-            "total_cobro_actual":"Total a cobrar (actual)","abonado":"Abonado","saldo_actual":"Saldo (actual)",
-            "estado_pago":"Estado de pago"
+            "id_pedido":"ID",
+            "fecha":"Fecha pedido",
+            "fecha_entrega":"Fecha entrega",
+            "cliente":"Cliente",
+            "total":"Total",
+            "preferencial":"Preferencial",
+            "estado_surtido":"Estado surtido",
+            "pagado":"Pagado",
+            "elegible10":"Elegible 10%",
+            "dias_entrega":"Días desde entrega",
+            "total_cobro_actual":"Total a cobrar (actual)",
+            "abonado":"Abonado",
+            "saldo":"Saldo",
+            "desc_fijo_pct":"Desc. fijo (%)",
+            "total_fijo":"Total fijo",
         }
-        for c in cols:
-            self.tree.heading(c, text=headers[c]); self.tree.column(c, anchor="center")
+        self.tree = ttk.Treeview(self.frame, columns=cols, show="headings", height=18, style=self.tree_style)
 
+        for c in cols:
+            self.tree.heading(c, text=headers[c])
+            width_map = {
+                "id_pedido":110, "fecha":120, "fecha_entrega":140, "cliente":220, "total":100,
+                "preferencial":95, "estado_surtido":110, "pagado":70, "elegible10":95,
+                "dias_entrega":120, "total_cobro_actual":160, "abonado":110, "saldo":110,
+                "desc_fijo_pct":105, "total_fijo":110
+            }
+            self.tree.column(c, anchor="center", width=width_map.get(c, 100), stretch=False)
+
+        # Menú contextual
         self._ctx = tk.Menu(self.frame, tearoff=0)
-        self._ctx.add_command(label="Registrar abono…", command=self._registrar_abono)
-        self._ctx.add_command(label="Ver pagos…", command=self._ver_pagos)
+        # índices: 0:fecha, 1:sep, 2:abono, 3:historial, 4:sep, 5:aplicar desc, 6:quitar desc
+        self._ctx.add_command(label="Establecer fecha de entrega…", command=self._menu_set_fecha_entrega)
+        self._ctx.add_separator()
+        self._ctx.add_command(label="Registrar abono…", command=self._menu_registrar_abono)
+        self._ctx.add_command(label="Ver historial de abonos…", command=self._menu_historial_abonos)
+        self._ctx.add_separator()
+        self._ctx.add_command(label="Aplicar descuento forzado 10%…", command=self._aplicar_desc_forzado)
+        self._ctx.add_command(label="Quitar descuento forzado…", command=self._quitar_desc_forzado)
+
         self.tree.bind("<Button-3>", self._show_ctx)
         self.tree.bind("<Control-Button-1>", self._show_ctx)
 
+        # Scrollbars
         sy = ttk.Scrollbar(self.frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sy.set)
         self.hsb = ttk.Scrollbar(self.frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(xscrollcommand=self.hsb.set)
 
+        # Layout
         self.tree.grid(row=1, column=0, sticky="nsew", padx=(15,0), pady=(6,0))
         sy.grid(row=1, column=1, sticky="ns", pady=(6,0))
         self.hsb.grid(row=2, column=0, sticky="ew", padx=(15,0), pady=(0,12))
@@ -103,275 +134,420 @@ class TabCobranza:
         self.frame.grid_rowconfigure(1, weight=1)
 
     def _init_row_tags(self):
-        self.tree.tag_configure("pay_pend", background="#00bcd4", foreground="#000000")
-        self.tree.tag_configure("pay_parc", background="#f1c40f", foreground="#000000")
-        self.tree.tag_configure("pay_comp", background="#2ecc71", foreground="#000000")
+        # Colores: celeste=Pago Pendiente, amarillo=Pago Parcial, verde=Pago Completo
+        self.tree.tag_configure("pend", background="#00bcd4", foreground="#000000")
+        self.tree.tag_configure("parc", background="#f1c40f", foreground="#000000")
+        self.tree.tag_configure("comp", background="#2ecc71", foreground="#000000")
 
+    # ------------------- Helpers -----------------------------
     def _show_ctx(self, event):
         iid = self.tree.identify_row(event.y)
-        if iid: self.tree.selection_set(iid); self.tree.focus(iid)
-        try: self._ctx.tk_popup(event.x_root, event.y_root)
-        finally: self._ctx.grab_release()
+        if iid:
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+
+        # Detectar estado pagado y preferencial desde la fila seleccionada
+        pagado_si = False
+        pref_si = False
+        try:
+            sel = self.tree.selection()
+            if sel:
+                vals = self.tree.item(sel[0])["values"]
+                # columnas: 0:id,1:fecha,2:fecha_entrega,3:cliente,4:total,5:preferencial,6:estado,7:pagado,...
+                pagado_txt = str(vals[7]).strip().lower() if len(vals) > 7 else "no"
+                pagado_si = (pagado_txt in ("sí", "si", "yes", "1"))
+
+                pref_txt = str(vals[5]).strip().lower() if len(vals) > 5 else "no"
+                pref_si = (pref_txt in ("sí", "si", "yes", "1"))
+        except Exception:
+            pagado_si = False
+            pref_si = False
+
+        # Índices en el menú contextual:
+        # 0: fecha, 1: sep, 2: registrar abono, 3: historial, 4: sep, 5: aplicar desc, 6: quitar desc
+        try:
+            # Deshabilitar opciones de descuento si está pagado O si es preferencial
+            disable_discounts = (pagado_si or pref_si)
+            self._ctx.entryconfigure(5, state=("disabled" if disable_discounts else "normal"))
+            self._ctx.entryconfigure(6, state=("disabled" if disable_discounts else "normal"))
+        except Exception:
+            pass
+
+        try:
+            self._ctx.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._ctx.grab_release()
+
 
     def _limpiar(self):
-        self.var_buscar.set(""); self.cmb_pago.set("Todos"); self.refrescar()
+        self.var_buscar.set("")
+        self.refrescar()
+
+    def _get_selected_id(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        vals = self.tree.item(sel[0])["values"]
+        if not vals:
+            return None
+        return str(vals[0])
 
     def _filtrados(self):
-        try: rows = leer_pedidos()
+        try:
+            rows = leer_pedidos()
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudieron leer pedidos.\n{e}"); return []
-        rows = [r for r in rows if (r.get("estado","").strip().lower()!="cancelado")]
+            messagebox.showerror("Error", f"No se pudieron leer pedidos.\n{e}")
+            return []
+        rows = [r for r in rows if (r.get("estado","").strip().lower() != "cancelado")]
         q = (self.var_buscar.get() or "").strip()
-        if q: rows = [r for r in rows if q in (r.get("id_pedido",""))]
-        fp = (self.cmb_pago.get() or "Todos").strip().lower()
-        if fp!="todos":
-            out=[]
-            for r in rows:
-                est,_,_ = estado_pago(r.get("id_pedido",""))
-                if (fp=="pago pendiente" and est=="Pago Pendiente") or \
-                   (fp=="pago parcial" and est=="Pago Parcial") or \
-                   (fp=="pago completo" and est=="Pago Completo"):
-                    out.append(r)
-            rows=out
+        if q:
+            rows = [r for r in rows if q in (r.get("id_pedido",""))]
         return rows
 
     def refrescar(self):
-        for iid in self.tree.get_children(): self.tree.delete(iid)
-        self._current=None
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        self._current = None
+
         for r in self._filtrados():
-            objetivo_actual,_,_ = total_cobro_actual(r.get("id_pedido",""))
-            try: total = float((r.get("total") or "0").replace(",","").strip())
-            except: total = 0.0
-            abon = total_abonado(r.get("id_pedido",""))
-            saldo = max(0.0, (objetivo_actual or total) - abon)
-            estp,_,_ = estado_pago(r.get("id_pedido",""))
-            tag = "pay_pend" if estp=="Pago Pendiente" else ("pay_parc" if estp=="Pago Parcial" else "pay_comp")
-            self.tree.insert("", "end",
-                values=(r.get("id_pedido",""), r.get("fecha",""), r.get("cliente",""),
-                        f"{total:.2f}", f"{(objetivo_actual or total):.2f}", f"{abon:.2f}", f"{saldo:.2f}", estp),
-                tags=(tag,))
-
-    def _get_selected_id(self):
-        sel=self.tree.selection()
-        if not sel: return None
-        vals=self.tree.item(sel[0])["values"]
-        return str(vals[0]) if vals else None
-
-    # ------------------- Utilidades de UI ----------------------
-    def _shake_window(self, win, cycles=8, amplitude=10):
-        try:
-            geo = win.geometry()
-            parts = geo.split("+")
-            if len(parts) < 3:
-                return
-            base_x = int(parts[-2]); base_y = int(parts[-1])
-        except Exception:
-            return
-
-        offsets = [amplitude, -amplitude] * (cycles // 2) + [0]
-        def _step(i=0):
-            if i >= len(offsets):
-                try:
-                    win.geometry(f"+{base_x}+{base_y}")
-                except:
-                    pass
-                return
-            dx = offsets[i]
+            pid = r.get("id_pedido","")
+            fecha = r.get("fecha","")
+            fecha_entrega = r.get("fecha_entrega","")
+            cliente = r.get("cliente","")
+            total_txt = r.get("total","0")
             try:
-                win.geometry(f"+{base_x + dx}+{base_y}")
-            except:
-                return
-            win.after(18, _step, i+1)
-        _step()
+                total_pedido = float((total_txt or "0").replace(",",".")) if total_txt else 0.0
+            except Exception:
+                total_pedido = 0.0
 
-    def _flash_focus(self, win: tk.Toplevel):
-        try: win.bell()
-        except: pass
-        try:
-            win.attributes("-topmost", True)
-            win.focus_force()
-        except: pass
-        self._shake_window(win)
+            try:
+                objetivo_actual, pct_hoy, dias_entrega = total_cobro_actual(pid)
+            except Exception:
+                objetivo_actual, pct_hoy, dias_entrega = 0.0, 0.0, "N/A"
+            try:
+                abonado = total_abonado(pid)
+            except Exception:
+                abonado = 0.0
+            saldo = max(0.0, objetivo_actual - abonado)
 
-    # ------------------- Acciones ----------------------
-    def _registrar_abono(self):
+            try:
+                el = descuento_eligibilidad(pid)
+                elegible = "Sí" if el.get("eligible", False) else "No"
+            except Exception:
+                elegible = "No"
+
+            preferencial = "Sí" if r.get("descuento","0") == "1" else "No"
+            estado_surtido = r.get("estado","")
+            pagado = "Sí" if r.get("pagado","0") == "1" else "No"
+
+            desc_fijo_pct = r.get("descuento_pago_pct","").strip()
+            total_fijo = r.get("total_cobro","").strip()
+
+            # Etiqueta por estado de pago
+            tag = "pend"
+            if abs(saldo) < 0.01 and objetivo_actual > 0:
+                tag = "comp"
+            elif abonado > 0:
+                tag = "parc"
+
+            self.tree.insert(
+                "", "end",
+                values=(
+                    pid, fecha, fecha_entrega, cliente, f"{total_pedido:.2f}",
+                    preferencial, estado_surtido, pagado,
+                    elegible, (dias_entrega if isinstance(dias_entrega, int) else "N/A"),
+                    f"{objetivo_actual:.2f}", f"{abonado:.2f}", f"{saldo:.2f}",
+                    desc_fijo_pct, total_fijo
+                ),
+                tags=(tag,)
+            )
+
+    # =================== Menú contextual =====================
+
+    # --- Fecha de entrega
+    def _menu_set_fecha_entrega(self):
         pid = self._get_selected_id()
         if not pid:
-            messagebox.showwarning("Atención", "Selecciona un pedido."); return
-
-        if self._abono_win and self._abono_win.winfo_exists():
-            self._flash_focus(self._abono_win)
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
             return
 
-        win = tk.Toplevel(self.frame); self._abono_win = win
-        win.title(f"Registrar abono · {pid}")
+        win = tk.Toplevel(self.frame)
+        win.title(f"Fecha de entrega – {pid}")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()  # modal
+        win.resizable(False, False)
 
-        # --- Siempre visible y modal ---
-        try:
-            master = self.frame.winfo_toplevel()
-            win.transient(master)
-        except:
-            pass
-        try:
-            win.attributes("-topmost", True)
-        except:
-            pass
-        try:
-            win.grab_set()
-        except:
-            pass
+        frm = ttk.Frame(win, padding=12)
+        frm.grid(row=0, column=0, sticky="nsew")
 
+        ttk.Label(frm, text="Fecha de entrega:", style=self.label_style).grid(row=0, column=0, sticky="w")
+
+        now = datetime.now()
+        if _HAS_TKCAL:
+            self._date_picker = DateEntry(frm, width=14, year=now.year, month=now.month, day=now.day, date_pattern="yyyy-mm-dd")
+            self._date_picker.grid(row=1, column=0, sticky="w", pady=(2,6))
+        else:
+            row2 = ttk.Frame(frm); row2.grid(row=2, column=0, sticky="w", pady=(2,6))
+            self._spn_year = ttk.Spinbox(row2, from_=now.year-5, to=now.year+5, width=6)
+            self._spn_month = ttk.Spinbox(row2, from_=1, to=12, width=4)
+            self._spn_day = ttk.Spinbox(row2, from_=1, to=31, width=4)
+            self._spn_year.set(str(now.year)); self._spn_month.set(str(now.month)); self._spn_day.set(str(now.day))
+            ttk.Label(row2, text="Año", style=self.label_style).pack(side="left", padx=(0,4)); self._spn_year.pack(side="left")
+            ttk.Label(row2, text="Mes", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_month.pack(side="left")
+            ttk.Label(row2, text="Día", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_day.pack(side="left")
+
+        row_time = ttk.Frame(frm); row_time.grid(row=3, column=0, sticky="w", pady=(4,2))
+        ttk.Label(row_time, text="Hora:", style=self.label_style).pack(side="left", padx=(0,4))
+        self._spn_hour = ttk.Spinbox(row_time, from_=0, to=23, width=4); self._spn_hour.set(f"{now.hour:02d}"); self._spn_hour.pack(side="left")
+        ttk.Label(row_time, text="Min:", style=self.label_style).pack(side="left", padx=(8,4))
+        self._spn_min = ttk.Spinbox(row_time, from_=0, to=59, width=4, increment=5); self._spn_min.set(f"{now.minute:02d}"); self._spn_min.pack(side="left")
+
+        btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="ew", pady=(10,0))
+        def _use_now():
+            if _HAS_TKCAL:
+                self._date_picker.set_date(date.today())
+            else:
+                t = datetime.now()
+                self._spn_year.set(str(t.year)); self._spn_month.set(str(t.month)); self._spn_day.set(str(t.day))
+            t = datetime.now()
+            self._spn_hour.set(f"{t.hour:02d}"); self._spn_min.set(f"{t.minute:02d}")
+        def _clear():
+            try:
+                from data.csv_manager import set_fecha_entrega as _setfe
+                ok = _setfe(pid, "")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo limpiar la fecha de entrega.\n{e}")
+                return
+            if ok:
+                messagebox.showinfo("Listo", f"Se limpió la fecha de entrega para {pid}.")
+                win.destroy(); self.refrescar(); self._emit_refresh_all()
+
+        ttk.Button(btns, text="Usar ahora", command=_use_now, style=self.button_style).pack(side="left")
+        ttk.Button(btns, text="Limpiar", command=_clear, style=self.button_style).pack(side="left", padx=(8,0))
+        ttk.Button(btns, text="Guardar", command=lambda: self._save_fecha_entrega(pid, win), style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar", command=win.destroy, style=self.button_style).pack(side="right", padx=(0,8))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
+    def _save_fecha_entrega(self, pid: str, win: tk.Toplevel):
+        try:
+            hh = int(self._spn_hour.get()); mm = int(self._spn_min.get())
+            if not (0 <= hh <= 23 and 0 <= mm <= 59): raise ValueError
+        except Exception:
+            messagebox.showerror("Error", "Hora o minuto inválidos."); return
+        try:
+            if _HAS_TKCAL:
+                d = self._date_picker.get_date(); y, m, d_ = d.year, d.month, d.day
+            else:
+                y = int(self._spn_year.get()); m = int(self._spn_month.get()); d_ = int(self._spn_day.get())
+            dt = datetime(year=y, month=m, day=d_, hour=hh, minute=mm)
+        except Exception:
+            messagebox.showerror("Error", "Fecha inválida."); return
+
+        iso_str = dt.strftime("%Y-%m-%d %H:%M")
+        try:
+            ok = set_fecha_entrega(pid, iso_str)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo establecer la fecha de entrega.\n{e}")
+            return
+
+        if ok:
+            messagebox.showinfo("Listo", f"Fecha de entrega actualizada para {pid}.")
+            win.destroy(); self.refrescar(); self._emit_refresh_all()
+        else:
+            messagebox.showinfo("Info", "No se realizaron cambios.")
+
+    # --- Registrar abono (modal blindado)
+    def _menu_registrar_abono(self):
+        pid = self._get_selected_id()
+        if not pid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+
+        # Si ya hay una ventana abierta, traerla al frente y parpadear
+        if self._dlg_abono and self._dlg_abono.winfo_exists():
+            try:
+                self._dlg_abono.lift()
+                self._dlg_abono.attributes("-topmost", True)
+                self._dlg_abono.after(200, lambda: self._dlg_abono.attributes("-topmost", False))
+                self._dlg_abono.bell()
+            except Exception:
+                pass
+            return
+
+        # Datos de saldo actuales
+        objetivo, _, _ = total_cobro_actual(pid)
+        abon = total_abonado(pid)
+        saldo = max(0.0, objetivo - abon)
+
+        win = tk.Toplevel(self.frame)
+        self._dlg_abono = win
+        win.title(f"Registrar abono – {pid}")
+        win.transient(self.frame.winfo_toplevel())
+        win.resizable(False, False)
+        win.grab_set()  # modal
+
+        # Si el usuario cierra la ventana, limpiar referencia
         def _on_close():
-            try: win.grab_release()
-            except: pass
-            try: win.destroy()
-            finally: self._abono_win = None
-
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            self._dlg_abono = None
+            win.destroy()
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
-        def _on_focus_out(_evt=None):
-            if self._abono_in_msg:
-                return  # no parpadear mientras un messagebox está abierto
-            if win.winfo_exists():
-                self._flash_focus(win)
-        win.bind("<FocusOut>", _on_focus_out)
+        frm = ttk.Frame(win, padding=12)
+        frm.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(win, text="Monto:", style=self.label_style).grid(row=0, column=0, padx=10, pady=(12,6), sticky="e")
+        ttk.Label(frm, text=f"Total actual: ${objetivo:.2f}", style=self.label_style).grid(row=0, column=0, sticky="w")
+        ttk.Label(frm, text=f"Abonado: ${abon:.2f}", style=self.label_style).grid(row=1, column=0, sticky="w", pady=(2,0))
+        ttk.Label(frm, text=f"Saldo: ${saldo:.2f}", style=self.label_style).grid(row=2, column=0, sticky="w", pady=(0,6))
 
-        vcmd = (win.register(self._validate_amount), "%P")
-        var_m = tk.StringVar()
-        ent = ttk.Entry(win, textvariable=var_m, width=14, validate="key", validatecommand=vcmd)
-        ent.grid(row=0, column=1, padx=10, pady=(12,6), sticky="w"); ent.focus()
+        ttk.Label(frm, text="Monto del abono:", style=self.label_style).grid(row=3, column=0, sticky="w")
+        self.var_monto_abono = tk.StringVar(value="")
+        ent = ttk.Entry(frm, textvariable=self.var_monto_abono, width=18)
+        ent.grid(row=4, column=0, sticky="w", pady=(2,6))
+        ent.focus_set()
 
-        obj_act, _, _ = total_cobro_actual(pid); abon = total_abonado(pid)
-        saldo = max(0.0, obj_act - abon)
-        lbl_saldo = ttk.Label(win, text=f"Saldo actual: ${saldo:,.2f}", style=self.label_style)
-        lbl_saldo.grid(row=1, column=0, columnspan=2, padx=10, pady=(0,6), sticky="w")
+        # Validación: solo números y punto
+        def _validate_monto(P):
+            s = (P or "").strip()
+            if s == "":
+                return True
+            if s.count(".") > 1:
+                return False
+            return all(ch.isdigit() or ch == "." for ch in s)
+        vcmd = (win.register(_validate_monto), "%P")
+        ent.configure(validate="key", validatecommand=vcmd)
 
-        # Helpers de mensajes MODALES, seguros con grab + parent
-        def _err(msg: str, title="Error"):
-            self._abono_in_msg = True
+        btns = ttk.Frame(frm)
+        btns.grid(row=5, column=0, sticky="ew", pady=(8,0))
+
+        def _error_modal(msg: str):
+            try: win.grab_release()
+            except Exception: pass
+            messagebox.showerror("Error", msg, parent=win)
+            try: win.grab_set()
+            except Exception: pass
+
+        def _guardar():
+            raw = self.var_monto_abono.get().strip()
+            if raw == "":
+                _error_modal("Ingresa un monto.")
+                return
             try:
-                messagebox.showerror(title, msg, parent=win)
-            finally:
-                self._abono_in_msg = False
-
-        def _info(msg: str, title="Listo"):
-            self._abono_in_msg = True
-            try:
-                messagebox.showinfo(title, msg, parent=win)
-            finally:
-                self._abono_in_msg = False
-
-        def _ok():
-            txt = (var_m.get() or "").strip()
-            try: monto = float(txt.replace("$","").replace(",",""))
-            except: monto = -1
+                monto = float(raw)
+            except Exception:
+                _error_modal("Monto no válido.")
+                return
             if monto <= 0:
-                _err("Ingresa un monto válido (> 0)."); return
+                _error_modal("El monto debe ser mayor a 0.")
+                return
 
-            obj_act2, _, _ = total_cobro_actual(pid)
-            abon2 = total_abonado(pid)
-            saldo2 = max(0.0, obj_act2 - abon2)
-            if saldo2 <= 0:
-                _err("Este pedido ya no tiene saldo por cubrir."); return
-            if monto > saldo2 + 1e-9:
-                _err(f"El monto excede el saldo actual (${saldo2:.2f})."); return
+            obj, _, _ = total_cobro_actual(pid)
+            ab = total_abonado(pid)
+            sal = max(0.0, obj - ab)
+            if monto > sal + 1e-9:
+                _error_modal(f"El abono excede el saldo actual (${sal:.2f}).")
+                return
 
             try:
                 registrar_abono(pid, monto)
             except Exception as e:
-                _err(f"No se pudo registrar el abono.\n{e}")
+                _error_modal(str(e))
                 return
 
-            estp, abon_tot, obj = estado_pago(pid)
-            _info(f"Abono registrado.\nEstado: {estp}\nAbonado: ${abon_tot:,.2f} de ${obj:,.2f}")
-
+            messagebox.showinfo("Listo", f"Abono registrado: ${monto:.2f}", parent=win)
             _on_close()
-            self.refrescar(); self._emit_refresh_all()
+            self.refrescar()
+            self._emit_refresh_all()
 
-        ttk.Button(win, text="Guardar", command=_ok, style=self.button_style)\
-            .grid(row=2, column=0, padx=10, pady=(8,12))
-        ttk.Button(win, text="Cancelar", command=_on_close, style=self.button_style)\
-            .grid(row=2, column=1, padx=10, pady=(8,12))
+        ttk.Button(btns, text="Guardar", command=_guardar, style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar", command=_on_close, style=self.button_style).pack(side="right", padx=(0,8))
 
+        # Centrar
         win.update_idletasks()
-        try:
-            master = self.frame.winfo_toplevel()
-            mx = master.winfo_rootx(); my = master.winfo_rooty()
-            mw = master.winfo_width(); mh = master.winfo_height()
-            ww = win.winfo_width(); wh = win.winfo_height()
-            x = mx + (mw - ww)//2; y = my + (mh - wh)//3
-            win.geometry(f"+{max(0,x)}+{max(0,y)}")
-        except:
-            pass
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
 
-    def _validate_amount(self, proposed: str) -> bool:
-        s = proposed.strip()
-        if s == "": return True
-        if s.count(".") > 1: return False
-        if s.startswith("."): s = "0" + s
-        for ch in s:
-            if not (ch.isdigit() or ch == "."):
-                return False
-        return True
-
-    def _ver_pagos(self):
+    # --- Historial de abonos (solo lectura)
+    def _menu_historial_abonos(self):
         pid = self._get_selected_id()
         if not pid:
-            messagebox.showwarning("Atención", "Selecciona un pedido."); return
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
 
-        win = tk.Toplevel(self.frame); win.title(f"Pagos del pedido {pid}")
-        frm = ttk.Frame(win, style=self.frame_style); frm.pack(fill="both", expand=True, padx=10, pady=10)
+        pagos = []
+        try:
+            pagos = leer_abonos(pid)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo leer el historial.\n{e}")
+            return
+
+        win = tk.Toplevel(self.frame)
+        win.title(f"Historial de abonos – {pid}")
+        win.transient(self.frame.winfo_toplevel())
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=10)
+        frm.grid(row=0, column=0, sticky="nsew")
 
         cols = ("id_pago","fecha","monto")
-        tree = ttk.Treeview(frm, columns=cols, show="headings", height=12, style=self.tree_style, selectmode="browse")
-        for c,t in {"id_pago":"ID pago","fecha":"Fecha","monto":"Monto"}.items():
-            tree.heading(c, text=t); tree.column(c, anchor="center")
-        sy = ttk.Scrollbar(frm, orient="vertical", command=tree.yview); tree.configure(yscrollcommand=sy.set)
-        tree.grid(row=0, column=0, sticky="nsew"); sy.grid(row=0, column=1, sticky="ns")
-        frm.grid_rowconfigure(0, weight=1); frm.grid_columnconfigure(0, weight=1)
+        tv = ttk.Treeview(frm, columns=cols, show="headings", height=10, style=self.tree_style)
+        tv.heading("id_pago", text="ID Pago"); tv.column("id_pago", width=160, anchor="center")
+        tv.heading("fecha", text="Fecha"); tv.column("fecha", width=130, anchor="center")
+        tv.heading("monto", text="Monto"); tv.column("monto", width=90, anchor="e")
+        for r in pagos:
+            tv.insert("", "end", values=(r.get("id_pago",""), r.get("fecha",""), r.get("monto","")))
+        tv.grid(row=0, column=0, sticky="nsew")
+        ttk.Button(frm, text="Cerrar", command=win.destroy, style=self.button_style).grid(row=1, column=0, pady=(8,0))
 
-        info = ttk.Label(frm, text="", style=self.label_style); info.grid(row=1, column=0, sticky="e", pady=(8,0))
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
 
-        btns = ttk.Frame(frm, style=self.frame_style); btns.grid(row=2, column=0, sticky="e", pady=(10,0))
-        del_btn = ttk.Button(btns, text="Eliminar abono seleccionado…", style=self.button_style)
-        del_btn.grid(row=0, column=0, padx=(0,8))
-        ttk.Button(btns, text="Cerrar", command=win.destroy, style=self.button_style).grid(row=0, column=1)
+    # --- Descuento forzado
+    def _aplicar_desc_forzado(self):
+        pid = self._get_selected_id()
+        if not pid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+        if not messagebox.askyesno("Confirmar", f"Aplicar DESCUENTO FORZADO del 10% a {pid}?"):
+            return
+        try:
+            ok = aplicar_descuento_forzado(pid, 10.0)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo aplicar el descuento forzado.\n{e}")
+            return
+        if ok:
+            messagebox.showinfo("Listo", f"Descuento forzado aplicado a {pid}.")
+            self.refrescar(); self._emit_refresh_all()
+        else:
+            messagebox.showinfo("Info", "No se realizaron cambios.")
 
-        def _reload():
-            for iid in tree.get_children(): tree.delete(iid)
-            try: pagos = leer_abonos(pid)
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudieron leer los pagos.\n{e}", parent=win); return
-            total_ab = 0.0
-            for p in pagos:
-                try: m=float((p.get("monto") or "0").replace(",", ""))
-                except: m=0.0
-                total_ab += m
-                tree.insert("", "end", values=(p.get("id_pago",""), p.get("fecha",""), f"{m:.2f}"))
-            obj_act, pct, dias = total_cobro_actual(pid)
-            info.configure(text=f"Total abonado: ${total_ab:,.2f}   |   Total a cobrar (actual): ${obj_act:,.2f}   "
-                                f"|   Saldo (actual): ${max(0.0, obj_act - total_ab):,.2f}"
-                                + (f"   |   Pronto-pago hoy: {pct:.0f}% (día {dias})" if pct>0 else ""))
-
-        def _eliminar_sel():
-            sel = tree.selection()
-            if not sel:
-                messagebox.showwarning("Atención", "Selecciona un abono en la lista.", parent=win); return
-            vals = tree.item(sel[0])["values"]
-            if not vals: return
-            id_pago = str(vals[0])
-            if not messagebox.askyesno("Confirmar", f"¿Eliminar el abono {id_pago}?", parent=win): return
-            try:
-                ok, _ = eliminar_abono(id_pago)
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo eliminar el abono.\n{e}", parent=win); return
-            if ok:
-                messagebox.showinfo("Listo", f"Se eliminó el abono {id_pago}.", parent=win)
-                _reload(); self.refrescar(); self._emit_refresh_all()
-            else:
-                messagebox.showinfo("Info", "No fue posible eliminar el abono seleccionado.", parent=win)
-
-        del_btn.configure(command=_eliminar_sel)
-        _reload()
+    def _quitar_desc_forzado(self):
+        pid = self._get_selected_id()
+        if not pid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+        if not messagebox.askyesno("Confirmar", f"Quitar el DESCUENTO FORZADO de {pid}?"):
+            return
+        try:
+            ok = quitar_descuento_forzado(pid)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo quitar el descuento forzado.\n{e}")
+            return
+        if ok:
+            messagebox.showinfo("Listo", f"Descuento forzado eliminado en {pid}.")
+            self.refrescar(); self._emit_refresh_all()
+        else:
+            messagebox.showinfo("Info", "No se realizaron cambios.")
