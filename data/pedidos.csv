@@ -9,3 +9,4 @@ id_pedido,fecha,cliente,total,estado,descuento,pagado,descuento_pago_pct,total_c
 202510-008,2025-10-30 01:16,10 - José Ramon Dipp (Fibra De Vidrio),924.80,Parcial,0,0,,,,0
 202510-009,2025-10-31 01:35,75 - Ramiro Bravo,155.60,Pendiente,1,0,,,,0
 202510-010,2025-10-31 01:40,30 - Salvador Monroy,221.40,Pendiente,1,0,,,,0
+202511-001,2025-11-01 15:54,50 - Federico Ramirez,6201.90,Pendiente,0,0,,,2025-11-01 15:55,0

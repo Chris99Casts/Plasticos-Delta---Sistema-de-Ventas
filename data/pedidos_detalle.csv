@@ -19,3 +19,7 @@ id_linea,id_pedido,producto,cantidad,cantidad_completada,precio_unitario,importe
 202510-009-1,202510-009,Maceta Colgante,10,0,15.56,155.60
 202510-010-1,202510-010,Maceta Colgante,10,0,15.56,155.60
 202510-010-2,202510-010,Batidor 1,20,0,3.29,65.80
+202511-001-1,202511-001,Maceta Colgante,50,0,17.29,864.50
+202511-001-2,202511-001,Molcajete chico colores emb,200,0,4.38,876.00
+202511-001-3,202511-001,Bandeja Grande,70,0,16.62,1163.40
+202511-001-4,202511-001,Cubeta rectangular c/pico,100,0,32.98,3298.00

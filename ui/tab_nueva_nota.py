@@ -9,6 +9,8 @@ from reportlab.graphics.barcode import qr, code128
 from reportlab.graphics.shapes import Drawing
 from reportlab.graphics import renderPDF
 from data.csv_manager import generar_id_pedido_ym
+import json, secrets, hashlib
+from data.paths import PRODUCTOS_PATH, CLIENTES_PATH
 
 
 
@@ -26,6 +28,12 @@ from data.csv_manager import (
 )
 
 NOTAS_DIR = os.path.join(os.getcwd(), "Notas")
+
+# Config de administrador
+ADMIN_CFG = os.path.join(os.getcwd(), "admin_cfg.json")
+ADMIN_USER = "JPerez"  # usuario fijo
+DEFAULT_ADMIN_PASS = "18062002"  # podrás cambiarla en la ventana
+
 
 
 class TabNuevaNota:
@@ -47,6 +55,20 @@ class TabNuevaNota:
         self.on_refresh_all = on_refresh_all
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
+
+        # --- Menú contextual ---
+        self._ctx = tk.Menu(self.frame, tearoff=0)
+        self._ctx.add_command(label="Administrador…", command=self._admin_login)
+
+        # Mostrar menú con click derecho en el frame y en la tabla
+        self.frame.bind("<Button-3>", lambda e: self._ctx.tk_popup(e.x_root, e.y_root))
+        self.frame.bind("<Control-Button-1>", lambda e: self._ctx.tk_popup(e.x_root, e.y_root))
+        try:
+            self.tree.bind("<Button-3>", lambda e: (self.tree.focus_set(), self._ctx.tk_popup(e.x_root, e.y_root)))
+            self.tree.bind("<Control-Button-1>", lambda e: (self.tree.focus_set(), self._ctx.tk_popup(e.x_root, e.y_root)))
+        except Exception:
+            pass
+
 
         # Estado
         self.cliente = tk.StringVar()
@@ -140,10 +162,7 @@ class TabNuevaNota:
                                   command=self.registrar_pedido, style=self.button_style)
         self.btn_reg.grid(row=4, column=2, columnspan=2, pady=15, sticky="w")
 
-        # Editar CSV
-        self.btn_csv = ttk.Button(self.frame, text="Editar Productos CSV",
-                                  command=self.abrir_csv, style=self.button_style)
-        self.btn_csv.grid(row=4, column=6, sticky="e", padx=15)
+       
 
         # Bind Enter
         self.cantidad_entry.bind("<Return>", self.agregar_producto_event)
@@ -565,6 +584,179 @@ class TabNuevaNota:
         self.descuento.set(self.cliente_tiene_desc)
         self.lbl_desc.config(text=f"Desc.: {'Sí' if self.cliente_tiene_desc else 'No'}")
         self.actualizar_precio()  # refresca P.Unit del producto seleccionado (si hubiera)
+    
+
+    # ===================== ADMIN: helpers credenciales =====================
+    def _admin_load_cfg(self):
+        # Si no existe, crea con password por default
+        if not os.path.exists(ADMIN_CFG):
+            data = {
+                "user": ADMIN_USER,
+                "salt": secrets.token_hex(16),
+                "hash": ""  # se setea con DEFAULT_ADMIN_PASS
+            }
+            h = hashlib.sha256((DEFAULT_ADMIN_PASS + data["salt"]).encode("utf-8")).hexdigest()
+            data["hash"] = h
+            try:
+                with open(ADMIN_CFG, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return data
+        try:
+            with open(ADMIN_CFG, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"user": ADMIN_USER, "salt": secrets.token_hex(16), "hash": ""}
+
+    def _admin_check(self, user, password):
+        cfg = self._admin_load_cfg()
+        if (user or "").strip() != (cfg.get("user") or ADMIN_USER):
+            return False
+        salt = cfg.get("salt") or ""
+        expect = cfg.get("hash") or ""
+        h = hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+        return h == expect
+
+    def _admin_save_password(self, new_password):
+        cfg = self._admin_load_cfg()
+        cfg["salt"] = secrets.token_hex(16)
+        cfg["hash"] = hashlib.sha256((new_password + cfg["salt"]).encode("utf-8")).hexdigest()
+        cfg["user"] = ADMIN_USER
+        with open(ADMIN_CFG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+
+    # ===================== ADMIN: UI =====================
+    def _admin_login(self):
+        win = tk.Toplevel(self.frame)
+        win.title("Acceso administrador")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12); frm.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frm, text="Usuario:", style=self.label_style).grid(row=0, column=0, sticky="e", padx=(0,6), pady=4)
+        var_user = tk.StringVar(value=ADMIN_USER)
+        ttk.Entry(frm, textvariable=var_user, width=26).grid(row=0, column=1, sticky="w", pady=4)
+
+        ttk.Label(frm, text="Contraseña:", style=self.label_style).grid(row=1, column=0, sticky="e", padx=(0,6), pady=4)
+        var_pass = tk.StringVar()
+        ttk.Entry(frm, textvariable=var_pass, width=26, show="•").grid(row=1, column=1, sticky="w", pady=4)
+
+        btns = ttk.Frame(frm, style=self.frame_style); btns.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8,0))
+        def _ok():
+            if self._admin_check(var_user.get(), var_pass.get()):
+                try:
+                    win.grab_release()
+                except Exception:
+                    pass
+                win.destroy()
+                self._admin_panel()
+            else:
+                messagebox.showerror("Acceso", "Usuario o contraseña incorrectos.", parent=win)
+
+        ttk.Button(btns, text="Entrar", command=_ok, style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar", command=win.destroy, style=self.button_style).pack(side="right", padx=(0,8))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
+    def _admin_panel(self):
+        win = tk.Toplevel(self.frame)
+        win.title("Panel de administrador")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=14); frm.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(frm, text="Acciones:", style=self.label_style).grid(row=0, column=0, sticky="w", pady=(0,6))
+
+        # 1) Editar Productos CSV (solo admin)
+        ttk.Button(frm, text="Editar Productos CSV", style=self.button_style,
+                command=lambda: self._open_csv(PRODUCTOS_PATH)).grid(row=1, column=0, sticky="ew", pady=4)
+
+        # 2) Editar Clientes CSV (solo admin)
+        ttk.Button(frm, text="Editar Clientes CSV", style=self.button_style,
+                command=lambda: self._open_csv(CLIENTES_PATH)).grid(row=2, column=0, sticky="ew", pady=4)
+
+        # 3) Cambiar contraseña de administrador
+        ttk.Button(frm, text="Cambiar contraseña de administrador…", style=self.button_style,
+                command=self._admin_change_password).grid(row=3, column=0, sticky="ew", pady=(10,4))
+
+        ttk.Button(frm, text="Cerrar", command=win.destroy, style=self.button_style).grid(row=4, column=0, sticky="e", pady=(10,0))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
+    def _open_csv(self, path_csv: str):
+        try:
+            if os.name == "nt":
+                os.startfile(path_csv)  # type: ignore
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path_csv], check=False)
+            else:
+                subprocess.run(["xdg-open", path_csv], check=False)
+        except Exception as e:
+            messagebox.showerror("Abrir CSV", f"No se pudo abrir:\n{path_csv}\n\n{e}")
+
+    def _admin_change_password(self):
+        win = tk.Toplevel(self.frame)
+        win.title("Cambiar contraseña (admin)")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12); frm.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frm, text="Actual:", style=self.label_style).grid(row=0, column=0, sticky="e", padx=(0,6), pady=4)
+        v_old = tk.StringVar()
+        ttk.Entry(frm, textvariable=v_old, show="•", width=26).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(frm, text="Nueva:", style=self.label_style).grid(row=1, column=0, sticky="e", padx=(0,6), pady=4)
+        v_new = tk.StringVar()
+        ttk.Entry(frm, textvariable=v_new, show="•", width=26).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(frm, text="Confirmar:", style=self.label_style).grid(row=2, column=0, sticky="e", padx=(0,6), pady=4)
+        v_new2 = tk.StringVar()
+        ttk.Entry(frm, textvariable=v_new2, show="•", width=26).grid(row=2, column=1, sticky="w")
+
+        btns = ttk.Frame(frm, style=self.frame_style); btns.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8,0))
+
+        def _save():
+            if not self._admin_check(ADMIN_USER, v_old.get()):
+                messagebox.showerror("Error", "La contraseña actual no es correcta.", parent=win)
+                return
+            if not v_new.get():
+                messagebox.showerror("Error", "La nueva contraseña no puede estar vacía.", parent=win)
+                return
+            if v_new.get() != v_new2.get():
+                messagebox.showerror("Error", "La confirmación no coincide.", parent=win)
+                return
+            self._admin_save_password(v_new.get())
+            messagebox.showinfo("Listo", "Contraseña actualizada.", parent=win)
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            win.destroy()
+
+        ttk.Button(btns, text="Guardar", command=_save, style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar", command=win.destroy, style=self.button_style).pack(side="right", padx=(0,8))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
 
 
 
