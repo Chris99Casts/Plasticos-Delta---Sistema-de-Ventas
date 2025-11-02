@@ -5,7 +5,7 @@ from ui.tab_pedidos import TabPedidos
 from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
 from ui.tab_pendientes import TabPendientes
-
+import tkinter.font as tkfont 
 
 class NotaVentaApp:
     def __init__(self, root):
@@ -31,6 +31,58 @@ class NotaVentaApp:
 
         # Frames / contenedores
         style.configure("Dark.TFrame", background="#1e1e1e")
+
+        # ===== Escalado UI (Zoom con teclado) =====
+        self.ui_scale = 1.0
+        self._base_fonts = {}
+        self._style = style  # guarda referencia al Style
+
+        # toma snapshots de tamaños base de fuentes de Tk
+        for fname in ("TkDefaultFont","TkTextFont","TkFixedFont","TkMenuFont",
+                    "TkHeadingFont","TkIconFont","TkTooltipFont"):
+            try:
+                f = tkfont.nametofont(fname)
+                self._base_fonts[fname] = f.cget("size")
+            except tk.TclError:
+                pass
+
+        def _apply_scale():
+            # 1) fuentes
+            for fname, base in self._base_fonts.items():
+                try:
+                    f = tkfont.nametofont(fname)
+                    f.configure(size=max(8, int(round(base * self.ui_scale))))
+                except tk.TclError:
+                    pass
+
+            # 2) métricas de Treeview, Tabs, etc.
+            row_h = max(20, int(round(24 * self.ui_scale)))
+            tab_pad_y = max(4, int(round(6 * self.ui_scale)))
+            tab_pad_x = max(8, int(round(12 * self.ui_scale)))
+
+            # estilos “Dark”
+            self._style.configure("Dark.Treeview", rowheight=row_h)
+            self._style.configure("Dark.TNotebook.Tab", padding=(tab_pad_x, tab_pad_y))
+
+            # estilos “Pend” (los define TabPendientes)
+            try:
+                self._style.configure("Pend.Treeview", rowheight=row_h)
+                self._style.configure("Pend.TNotebook.Tab", padding=(tab_pad_x, tab_pad_y))
+            except tk.TclError:
+                pass
+
+            # 3) scaling de Tk (afecta algunos widgets nativos)
+            try:
+                self.root.tk.call("tk", "scaling", self.ui_scale)
+            except tk.TclError:
+                pass
+
+            # 4) refrescar layout
+            self.root.update_idletasks()
+
+        self._apply_scale = _apply_scale  # guarda como método
+        self._apply_scale()
+
 
         # Notebook + Tabs
         style.configure("Dark.TNotebook", background="#1e1e1e", borderwidth=0)
@@ -92,6 +144,23 @@ class NotaVentaApp:
         self.tab_pend = TabPendientes(notebook)
         notebook.add(self.tab_pend.frame, text="Pendientes")
 
+        # Zoom: Ctrl + / Ctrl - / Ctrl 0
+        def _zoom(delta):
+            self.ui_scale = max(0.7, min(1.8, round((self.ui_scale + delta), 2)))
+            self._apply_scale()
+
+        def _reset_zoom(_=None):
+            self.ui_scale = 1.0
+            self._apply_scale()
+
+        # Windows: Ctrl-plus también llega como Control-equal; Ctrl-minus / Ctrl-underscore
+        self.root.bind_all("<Control-plus>",   lambda e: _zoom(+0.10))
+        self.root.bind_all("<Control-equal>",  lambda e: _zoom(+0.10))
+        self.root.bind_all("<Control-minus>",  lambda e: _zoom(-0.10))
+        self.root.bind_all("<Control-underscore>", lambda e: _zoom(-0.10))
+        self.root.bind_all("<Control-0>", _reset_zoom)
+
+
 
 
     # Pantalla completa
@@ -133,5 +202,10 @@ class NotaVentaApp:
         try:
             if hasattr(self.tab_pend, "refrescar"):
                 self.tab_pend.refrescar()
+        except Exception:
+            pass
+        
+        try:
+            self._apply_scale()
         except Exception:
             pass

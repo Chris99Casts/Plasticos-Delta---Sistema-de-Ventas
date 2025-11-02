@@ -126,7 +126,7 @@ class TabPendientes:
                         background="#1e1e1e",
                         fieldbackground="#1e1e1e",
                         foreground="#ffffff",
-                        rowheight=26,
+                        rowheight=24,
                         bordercolor="#3a3a3a",
                         borderwidth=0)
         style.map("Pend.Treeview",
