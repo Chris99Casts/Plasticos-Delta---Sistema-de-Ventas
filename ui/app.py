@@ -6,6 +6,7 @@ from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
 from ui.tab_pendientes import TabPendientes
 import tkinter.font as tkfont 
+import json, os
 
 class NotaVentaApp:
     def __init__(self, root):
@@ -31,9 +32,29 @@ class NotaVentaApp:
 
         # Frames / contenedores
         style.configure("Dark.TFrame", background="#1e1e1e")
+        # ---- Persistencia de zoom ----
+        self._settings_file = os.path.join(os.path.expanduser("~"), ".plastics_delta_settings.json")
+
+        def _load_zoom():
+            try:
+                with open(self._settings_file, "r", encoding="utf-8") as f:
+                    return float(json.load(f).get("ui_scale", 1.0))
+            except Exception:
+                return 1.0
+
+        def _save_zoom():
+            try:
+                data = {"ui_scale": self.ui_scale}
+                with open(self._settings_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
+
+        self._load_zoom = _load_zoom
+        self._save_zoom = _save_zoom        
 
         # ===== Escalado UI (Zoom con teclado) =====
-        self.ui_scale = 1.0
+        self.ui_scale = self._load_zoom()
         self._base_fonts = {}
         self._style = style  # guarda referencia al Style
 
@@ -148,10 +169,12 @@ class NotaVentaApp:
         def _zoom(delta):
             self.ui_scale = max(0.7, min(1.8, round((self.ui_scale + delta), 2)))
             self._apply_scale()
+            self._save_zoom()
 
         def _reset_zoom(_=None):
             self.ui_scale = 1.0
             self._apply_scale()
+            self._save_zoom()
 
         # Windows: Ctrl-plus también llega como Control-equal; Ctrl-minus / Ctrl-underscore
         self.root.bind_all("<Control-plus>",   lambda e: _zoom(+0.10))
@@ -209,3 +232,11 @@ class NotaVentaApp:
             self._apply_scale()
         except Exception:
             pass
+        try:
+            self._apply_scale()
+        except Exception:
+            pass
+
+    
+
+
