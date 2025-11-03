@@ -4,7 +4,6 @@ from ui.tab_nueva_nota import TabNuevaNota
 from ui.tab_pedidos import TabPedidos
 from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
-from ui.tab_pendientes import TabPendientes
 import tkinter.font as tkfont 
 import json, os
 
@@ -161,9 +160,7 @@ class NotaVentaApp:
         )
         notebook.add(self.tab_cobranza.frame, text="Cobranza")
 
-        # Pendientes
-        self.tab_pend = TabPendientes(notebook)
-        notebook.add(self.tab_pend.frame, text="Pendientes")
+
 
         # Zoom: Ctrl + / Ctrl - / Ctrl 0
         def _zoom(delta):
