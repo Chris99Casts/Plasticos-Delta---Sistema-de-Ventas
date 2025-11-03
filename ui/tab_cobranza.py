@@ -105,8 +105,6 @@ class TabCobranza:
         # Menú contextual
         self._ctx = tk.Menu(self.frame, tearoff=0)
         # índices: 0:fecha, 1:sep, 2:abono, 3:historial, 4:sep, 5:aplicar desc, 6:quitar desc
-        self._ctx.add_command(label="Establecer fecha de entrega…", command=self._menu_set_fecha_entrega)
-        self._ctx.add_separator()
         self._ctx.add_command(label="Registrar abono…", command=self._menu_registrar_abono)
         self._ctx.add_command(label="Ver historial de abonos…", command=self._menu_historial_abonos)
         self._ctx.add_separator()
@@ -262,104 +260,7 @@ class TabCobranza:
                 tags=(tag,)
             )
 
-    # =================== Menú contextual =====================
-
-    # --- Fecha de entrega
-    def _menu_set_fecha_entrega(self):
-        pid = self._get_selected_id()
-        if not pid:
-            messagebox.showwarning("Atención", "Selecciona un pedido.")
-            return
-
-        win = tk.Toplevel(self.frame)
-        win.title(f"Fecha de entrega – {pid}")
-        win.transient(self.frame.winfo_toplevel())
-        win.grab_set()  # modal
-        win.resizable(False, False)
-
-        frm = ttk.Frame(win, padding=12)
-        frm.grid(row=0, column=0, sticky="nsew")
-
-        ttk.Label(frm, text="Fecha de entrega:", style=self.label_style).grid(row=0, column=0, sticky="w")
-
-        now = datetime.now()
-        if _HAS_TKCAL:
-            self._date_picker = DateEntry(frm, width=14, year=now.year, month=now.month, day=now.day, date_pattern="yyyy-mm-dd")
-            self._date_picker.grid(row=1, column=0, sticky="w", pady=(2,6))
-        else:
-            row2 = ttk.Frame(frm); row2.grid(row=2, column=0, sticky="w", pady=(2,6))
-            self._spn_year = ttk.Spinbox(row2, from_=now.year-5, to=now.year+5, width=6)
-            self._spn_month = ttk.Spinbox(row2, from_=1, to=12, width=4)
-            self._spn_day = ttk.Spinbox(row2, from_=1, to=31, width=4)
-            self._spn_year.set(str(now.year)); self._spn_month.set(str(now.month)); self._spn_day.set(str(now.day))
-            ttk.Label(row2, text="Año", style=self.label_style).pack(side="left", padx=(0,4)); self._spn_year.pack(side="left")
-            ttk.Label(row2, text="Mes", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_month.pack(side="left")
-            ttk.Label(row2, text="Día", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_day.pack(side="left")
-
-        row_time = ttk.Frame(frm); row_time.grid(row=3, column=0, sticky="w", pady=(4,2))
-        ttk.Label(row_time, text="Hora:", style=self.label_style).pack(side="left", padx=(0,4))
-        self._spn_hour = ttk.Spinbox(row_time, from_=0, to=23, width=4); self._spn_hour.set(f"{now.hour:02d}"); self._spn_hour.pack(side="left")
-        ttk.Label(row_time, text="Min:", style=self.label_style).pack(side="left", padx=(8,4))
-        self._spn_min = ttk.Spinbox(row_time, from_=0, to=59, width=4, increment=5); self._spn_min.set(f"{now.minute:02d}"); self._spn_min.pack(side="left")
-
-        btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="ew", pady=(10,0))
-        def _use_now():
-            if _HAS_TKCAL:
-                self._date_picker.set_date(date.today())
-            else:
-                t = datetime.now()
-                self._spn_year.set(str(t.year)); self._spn_month.set(str(t.month)); self._spn_day.set(str(t.day))
-            t = datetime.now()
-            self._spn_hour.set(f"{t.hour:02d}"); self._spn_min.set(f"{t.minute:02d}")
-        def _clear():
-            try:
-                from data.csv_manager import set_fecha_entrega as _setfe
-                ok = _setfe(pid, "")
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo limpiar la fecha de entrega.\n{e}")
-                return
-            if ok:
-                messagebox.showinfo("Listo", f"Se limpió la fecha de entrega para {pid}.")
-                win.destroy(); self.refrescar(); self._emit_refresh_all()
-
-        ttk.Button(btns, text="Usar ahora", command=_use_now, style=self.button_style).pack(side="left")
-        ttk.Button(btns, text="Limpiar", command=_clear, style=self.button_style).pack(side="left", padx=(8,0))
-        ttk.Button(btns, text="Guardar", command=lambda: self._save_fecha_entrega(pid, win), style=self.button_style).pack(side="right")
-        ttk.Button(btns, text="Cancelar", command=win.destroy, style=self.button_style).pack(side="right", padx=(0,8))
-
-        win.update_idletasks()
-        parent = self.frame.winfo_toplevel()
-        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
-        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
-        win.geometry(f"+{x}+{y}")
-
-    def _save_fecha_entrega(self, pid: str, win: tk.Toplevel):
-        try:
-            hh = int(self._spn_hour.get()); mm = int(self._spn_min.get())
-            if not (0 <= hh <= 23 and 0 <= mm <= 59): raise ValueError
-        except Exception:
-            messagebox.showerror("Error", "Hora o minuto inválidos."); return
-        try:
-            if _HAS_TKCAL:
-                d = self._date_picker.get_date(); y, m, d_ = d.year, d.month, d.day
-            else:
-                y = int(self._spn_year.get()); m = int(self._spn_month.get()); d_ = int(self._spn_day.get())
-            dt = datetime(year=y, month=m, day=d_, hour=hh, minute=mm)
-        except Exception:
-            messagebox.showerror("Error", "Fecha inválida."); return
-
-        iso_str = dt.strftime("%Y-%m-%d %H:%M")
-        try:
-            ok = set_fecha_entrega(pid, iso_str)
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo establecer la fecha de entrega.\n{e}")
-            return
-
-        if ok:
-            messagebox.showinfo("Listo", f"Fecha de entrega actualizada para {pid}.")
-            win.destroy(); self.refrescar(); self._emit_refresh_all()
-        else:
-            messagebox.showinfo("Info", "No se realizaron cambios.")
+    
 
     # --- Registrar abono (modal blindado)
     def _menu_registrar_abono(self):

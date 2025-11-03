@@ -10,7 +10,15 @@ from data.csv_manager import (
     actualizar_pedido_completo,
     cargar_productos,
     cancelar_pedido,
+    set_fecha_entrega,
 )
+
+# Mini calendario (opcional)
+try:
+    from tkcalendar import DateEntry
+    _HAS_TKCAL = True
+except Exception:
+    _HAS_TKCAL = False
 
 class TabPedidos:
     def __init__(self, notebook,
@@ -86,25 +94,34 @@ class TabPedidos:
         self.btn_pdf.grid(row=0, column=10, padx=(6, 0), sticky="w")
 
         # Tabla de pedidos
-        cols_p = ("id_pedido", "fecha", "cliente", "total", "estado", "descuento")
+        cols_p = ("id_pedido", "fecha", "fecha_entrega", "cliente", "total", "estado", "descuento")
         self.tree_pedidos = ttk.Treeview(self.frame, columns=cols_p, show="headings",
-                                         height=11, style=self.tree_style)
+                                        height=11, style=self.tree_style)
+
         headers = {
-            "id_pedido":"ID", "fecha":"Fecha", "cliente":"Cliente",
-            "total":"Total", "estado":"Estado", "descuento":"Desc."
+            "id_pedido":"ID", "fecha":"Fecha", "fecha_entrega":"Entrega",
+            "cliente":"Cliente", "total":"Total", "estado":"Estado", "descuento":"Desc."
         }
         for col in cols_p:
             self.tree_pedidos.heading(col, text=headers[col])
             self.tree_pedidos.column(col, anchor="center")
+
         self.tree_pedidos.bind("<<TreeviewSelect>>", self._on_select_pedido)
 
+        # Scrollbars
         y1 = ttk.Scrollbar(self.frame, orient="vertical", command=self.tree_pedidos.yview)
-        self.tree_pedidos.configure(yscrollcommand=y1.set)
+        x1 = ttk.Scrollbar(self.frame, orient="horizontal", command=self.tree_pedidos.xview)
+        self.tree_pedidos.configure(yscrollcommand=y1.set, xscrollcommand=x1.set)
 
-        self.tree_pedidos.grid(row=1, column=0, sticky="nsew", padx=(15,0), pady=(10,5))
+        self.tree_pedidos.grid(row=1, column=0, sticky="nsew", padx=(15,0), pady=(10,2))
+        y1.grid(row=1, column=1, sticky="ns", pady=(10,2))
+        x1.grid(row=2, column=0, sticky="ew", padx=(15,0))
 
-        # Menú contextual: Cancelar pedido
+
+        # Menú contextual: Cancelar pedido + Fecha de entrega
         self._ctx_menu = tk.Menu(self.frame, tearoff=0)
+        self._ctx_menu.add_command(label="Asignar fecha de entrega…", command=self._ctx_set_fecha_entrega)  # <-- NUEVO
+        self._ctx_menu.add_separator()  # <-- NUEVO
         self._ctx_menu.add_command(label="Cancelar pedido…", command=self._ctx_cancelar_pedido)
         self.tree_pedidos.bind("<Button-3>", self._show_ctx_menu)
         self.tree_pedidos.bind("<Control-Button-1>", self._show_ctx_menu)
@@ -114,7 +131,7 @@ class TabPedidos:
         # Tabla de detalle
         cols_d = ("id_linea","producto","cantidad","completado","pendiente","precio_unitario","importe")
         self.tree_detalle = ttk.Treeview(self.frame, columns=cols_d, show="headings",
-                                         height=13, style=self.tree_style)
+                                        height=13, style=self.tree_style)
         headers_d = {
             "id_linea":"ID Línea", "producto":"Producto", "cantidad":"Cantidad",
             "completado":"Completado", "pendiente":"Pendiente",
@@ -125,10 +142,13 @@ class TabPedidos:
             self.tree_detalle.column(col, anchor="center")
 
         y2 = ttk.Scrollbar(self.frame, orient="vertical", command=self.tree_detalle.yview)
-        self.tree_detalle.configure(yscrollcommand=y2.set)
+        x2 = ttk.Scrollbar(self.frame, orient="horizontal", command=self.tree_detalle.xview)
+        self.tree_detalle.configure(yscrollcommand=y2.set, xscrollcommand=x2.set)
 
-        self.tree_detalle.grid(row=2, column=0, sticky="nsew", padx=(15,0), pady=(5,15))
-        y2.grid(row=2, column=1, sticky="ns", pady=(5,15))
+        self.tree_detalle.grid(row=3, column=0, sticky="nsew", padx=(15,0), pady=(6,2))
+        y2.grid(row=3, column=1, sticky="ns", pady=(6,2))
+        x2.grid(row=4, column=0, sticky="ew", padx=(15,0), pady=(0,10))
+
 
         # Estado actual
         self._current_pedido = None
@@ -136,8 +156,9 @@ class TabPedidos:
 
     def _configure_grid(self):
         self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_rowconfigure(1, weight=1)
-        self.frame.grid_rowconfigure(2, weight=2)
+        self.frame.grid_rowconfigure(1, weight=1)  # pedidos
+        self.frame.grid_rowconfigure(3, weight=2)  # detalle (sube más) 
+
 
     # ---- Tags de color ----
     def _init_row_tags(self):
@@ -204,9 +225,11 @@ class TabPedidos:
 
             self.tree_pedidos.insert(
                 "", "end",
-                values=(p.get("id_pedido",""), p.get("fecha",""),
-                        p.get("cliente",""), p.get("total",""),
-                        p.get("estado",""), p.get("descuento","0")),
+                values=(
+                    p.get("id_pedido",""), p.get("fecha",""), p.get("fecha_entrega",""),
+                    p.get("cliente",""), p.get("total",""),
+                    p.get("estado",""), p.get("descuento","0")
+                ),
                 tags=(tag,)
             )
 
@@ -223,8 +246,9 @@ class TabPedidos:
         vals = self.tree_pedidos.item(sel[0])["values"]
         id_pedido = vals[0]
         self._current_pedido = id_pedido
-        self._current_descuento = str(vals[5]) if len(vals) > 5 else "0"
-        estado = (vals[4] or "").strip().lower() if len(vals) > 4 else ""
+        self._current_descuento = str(vals[6]) if len(vals) > 6 else "0"  # antes era [5]
+        estado = (vals[5] or "").strip().lower() if len(vals) > 5 else ""  # antes era [4]
+
 
         try:
             items = leer_items_por_pedido(id_pedido)
@@ -247,14 +271,31 @@ class TabPedidos:
 
     # --------- menú contextual ---------
     def _show_ctx_menu(self, event):
-        iid = self.tree_pedidos.identify_row(event.y)
-        if iid:
-            self.tree_pedidos.selection_set(iid)
-            self.tree_pedidos.focus(iid)
-        try:
-            self._ctx_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._ctx_menu.grab_release()
+        # Identifica la fila bajo el cursor
+        rowid = self.tree_pedidos.identify_row(event.y)
+        if rowid:
+            # Selecciona la fila sobre la que se hizo clic derecho
+            self.tree_pedidos.selection_set(rowid)
+            vals = self.tree_pedidos.item(rowid).get("values", [])
+            # Si el pedido está cancelado, NO mostramos el menú contextual
+            if self._is_row_cancelado(vals):
+                # Opcional: feedback sutil (comenta si no lo quieres)
+                # self.tree_pedidos.bell()
+                return
+
+            # Si NO está cancelado, asegura que las opciones estén habilitadas
+            try:
+                self._ctx_menu.entryconfig("Asignar fecha de entrega…", state="normal")
+                self._ctx_menu.entryconfig("Cancelar pedido…", state="normal")
+            except Exception:
+                pass
+
+            # Muestra menú
+            self._ctx_menu.post(event.x_root, event.y_root)
+        else:
+            # Clic derecho fuera de filas: no mostrar menú
+            return
+
 
     def _ctx_cancelar_pedido(self):
         sel = self.tree_pedidos.selection()
@@ -291,6 +332,12 @@ class TabPedidos:
             self.tree_detalle.delete(item)
         self._current_pedido = None
         self._emit_refresh_all()
+
+    def _is_row_cancelado(self, vals):
+        # Columna 'estado' es índice 5 según la definición de cols_p
+        estado = (str(vals[5]).strip().lower() if len(vals) > 5 else "")
+        return estado in {"cancelado", "cancelada", "canceled", "cancelled"}
+
 
     # -------- Editor masivo / Editor pedido (sin cambios aquí) --------
     def _abrir_editor_masivo(self):
@@ -395,6 +442,111 @@ class TabPedidos:
 
         abrir_pdf(pdf_path)
         messagebox.showinfo("Listo", f"Nota generada (reemplazada si existía).\n\n{os.path.basename(pdf_path)}")
+    
+    def _get_selected_pedido_id(self):
+        sel = self.tree_pedidos.selection()
+        if not sel:
+            return None
+        vals = self.tree_pedidos.item(sel[0])["values"]
+        return str(vals[0]) if vals else None
+
+    def _ctx_set_fecha_entrega(self):
+        pid = self._get_selected_pedido_id()
+        if not pid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+
+        win = tk.Toplevel(self.frame)
+        win.title(f"Fecha de entrega – {pid}")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12, style=self.frame_style)
+        frm.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frm, text="Fecha de entrega:", style=self.label_style).grid(row=0, column=0, sticky="w")
+
+        now = datetime.now()
+        if '_HAS_TKCAL' in globals() and _HAS_TKCAL:
+            self._date_picker = DateEntry(frm, width=14, year=now.year, month=now.month, day=now.day, date_pattern="yyyy-mm-dd")
+            self._date_picker.grid(row=1, column=0, sticky="w", pady=(2,6))
+        else:
+            row2 = ttk.Frame(frm, style=self.frame_style); row2.grid(row=1, column=0, sticky="w", pady=(2,6))
+            self._spn_year  = ttk.Spinbox(row2, from_=now.year-5, to=now.year+5, width=6);  self._spn_year.set(str(now.year))
+            self._spn_month = ttk.Spinbox(row2, from_=1, to=12,           width=4);         self._spn_month.set(str(now.month))
+            self._spn_day   = ttk.Spinbox(row2, from_=1, to=31,           width=4);         self._spn_day.set(str(now.day))
+            ttk.Label(row2, text="Año", style=self.label_style).pack(side="left", padx=(0,4)); self._spn_year.pack(side="left")
+            ttk.Label(row2, text="Mes", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_month.pack(side="left")
+            ttk.Label(row2, text="Día", style=self.label_style).pack(side="left", padx=(8,4)); self._spn_day.pack(side="left")
+
+        row_time = ttk.Frame(frm, style=self.frame_style); row_time.grid(row=2, column=0, sticky="w", pady=(4,2))
+        ttk.Label(row_time, text="Hora:", style=self.label_style).pack(side="left", padx=(0,4))
+        self._spn_hour = ttk.Spinbox(row_time, from_=0, to=23, width=4); self._spn_hour.set(f"{now.hour:02d}"); self._spn_hour.pack(side="left")
+        ttk.Label(row_time, text="Min:", style=self.label_style).pack(side="left", padx=(8,4))
+        self._spn_min  = ttk.Spinbox(row_time, from_=0, to=59, width=4, increment=5); self._spn_min.set(f"{now.minute:02d}"); self._spn_min.pack(side="left")
+
+        btns = ttk.Frame(frm, style=self.frame_style); btns.grid(row=3, column=0, sticky="ew", pady=(10,0))
+        def _use_now():
+            t = datetime.now()
+            if '_HAS_TKCAL' in globals() and _HAS_TKCAL:
+                self._date_picker.set_date(t.date())
+            else:
+                self._spn_year.set(str(t.year)); self._spn_month.set(str(t.month)); self._spn_day.set(str(t.day))
+            self._spn_hour.set(f"{t.hour:02d}"); self._spn_min.set(f"{t.minute:02d}")
+
+        def _clear():
+            try:
+                ok = set_fecha_entrega(pid, "")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo limpiar la fecha de entrega.\n{e}", parent=win)
+                return
+            if ok:
+                messagebox.showinfo("Listo", f"Se limpió la fecha de entrega para {pid}.", parent=win)
+                try: win.grab_release()
+                except: pass
+                win.destroy(); self.refrescar(); self._emit_refresh_all()
+
+        def _save():
+            try:
+                hh = int(self._spn_hour.get()); mm = int(self._spn_min.get())
+                if not (0 <= hh <= 23 and 0 <= mm <= 59): raise ValueError
+            except Exception:
+                messagebox.showerror("Error", "Hora o minuto inválidos.", parent=win); return
+            try:
+                if '_HAS_TKCAL' in globals() and _HAS_TKCAL:
+                    d = self._date_picker.get_date(); y, m, d_ = d.year, d.month, d.day
+                else:
+                    y = int(self._spn_year.get()); m = int(self._spn_month.get()); d_ = int(self._spn_day.get())
+                dt = datetime(year=y, month=m, day=d_, hour=hh, minute=mm)
+            except Exception:
+                messagebox.showerror("Error", "Fecha inválida.", parent=win); return
+
+            try:
+                ok = set_fecha_entrega(pid, dt.strftime("%Y-%m-%d %H:%M"))
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo establecer la fecha de entrega.\n{e}", parent=win)
+                return
+
+            if ok:
+                messagebox.showinfo("Listo", f"Fecha de entrega actualizada para {pid}.", parent=win)
+                try: win.grab_release()
+                except: pass
+                win.destroy(); self.refrescar(); self._emit_refresh_all()
+            else:
+                messagebox.showinfo("Info", "No se realizaron cambios.", parent=win)
+
+        ttk.Button(btns, text="Usar ahora", command=_use_now,  style=self.button_style).pack(side="left")
+        ttk.Button(btns, text="Limpiar",    command=_clear,    style=self.button_style).pack(side="left", padx=(8,0))
+        ttk.Button(btns, text="Guardar",    command=_save,     style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar",   command=lambda:(win.grab_release(), win.destroy()), style=self.button_style).pack(side="right", padx=(0,8))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
 
 
 # ---------------- Ventana: editor masivo (completados) ----------------
