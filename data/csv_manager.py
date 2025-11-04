@@ -40,6 +40,50 @@ PEDIDOS_FIELDS = [
 ]
 DETALLE_FIELDS = ["id_linea","id_pedido","producto","cantidad","cantidad_completada","precio_unitario","importe"]
 
+# ---------------- helpers de IO seguros (ignoran llaves extra) ----------------
+def _csv_rewrite(path: str, headers: list[str], rows: list[dict]):
+    """
+    Reescribe un CSV conservando sólo las columnas del encabezado.
+    Ignora llaves extra (extrasaction='ignore').
+    ¡Defensivo!: si rows está vacío y el archivo ya existe con datos, NO sobrescribe.
+    """
+    # Si nos pasan None, trátalo como lista vacía
+    rows = list(rows or [])
+
+    dirp = os.path.dirname(path)
+    if dirp:
+        os.makedirs(dirp, exist_ok=True)
+
+    # Protección: si el archivo ya existe y tiene contenido (> encabezado) y rows está vacío → no tocar
+    if os.path.exists(path) and os.path.getsize(path) > 0 and len(rows) == 0:
+        return
+
+    # Escribir (si rows vacío y no había archivo, se crea con sólo encabezado, que es correcto)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+        wr.writeheader()
+        for r in rows:
+            wr.writerow(r)
+
+
+def _csv_append(path: str, headers: list[str], row: dict):
+    """
+    Agrega una fila al CSV ignorando llaves extra.
+    Crea el archivo con encabezado si no existe o está vacío.
+    """
+    dirp = os.path.dirname(path)
+    if dirp:
+        os.makedirs(dirp, exist_ok=True)
+
+    write_header = (not os.path.exists(path)) or os.path.getsize(path) == 0
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+        if write_header:
+            wr.writeheader()
+        wr.writerow(row or {})
+
+
+
 # ---------------- archivos base ----------------
 def ensure_files():
     if not os.path.exists(PRODUCTOS_PATH):
@@ -94,20 +138,23 @@ def cargar_productos():
         return norm
     raise UnicodeDecodeError(f"No se pudo leer {PRODUCTOS_PATH}. Último error: {last}")
 
-# ---------------- helpers de IO ----------------
+# ---------------- helpers de IO (lectura) ----------------
 def _leer_todas_lineas():
     if not os.path.exists(PEDIDOS_DETALLE_PATH): ensure_files()
     with open(PEDIDOS_DETALLE_PATH, newline="", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
+
 def _escribir_todas_lineas(rows):
-    with open(PEDIDOS_DETALLE_PATH,"w",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f, fieldnames=DETALLE_FIELDS); w.writeheader(); w.writerows(rows)
+    # rows puede venir vacío por algún flujo; la protección está en _csv_rewrite
+    _csv_rewrite(PEDIDOS_DETALLE_PATH, DETALLE_FIELDS, rows)
+
 def _write_pedidos(rows):
+    # Normaliza y delega. Si rows vacío y el archivo ya tiene datos, no se sobrescribe.
+    rows = list(rows or [])
     for p in rows:
         p.setdefault("fecha_entrega","")
         p.setdefault("exento_minimo_desc","0")
-    with open(PEDIDOS_PATH,"w",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS); w.writeheader(); w.writerows(rows)
+    _csv_rewrite(PEDIDOS_PATH, PEDIDOS_FIELDS, rows)
 
 # ---------------- CRUD de pedidos ----------------
 def registrar_pedido(header: dict, items: list[dict]):
@@ -119,23 +166,24 @@ def registrar_pedido(header: dict, items: list[dict]):
         "pagado":"0", "descuento_pago_pct":"", "total_cobro":"",
         "fecha_entrega":"", "exento_minimo_desc":"0",
     }
-    file_exists = os.path.exists(PEDIDOS_PATH) and os.path.getsize(PEDIDOS_PATH)>0
-    with open(PEDIDOS_PATH,"a",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f, fieldnames=PEDIDOS_FIELDS)
-        if not file_exists: w.writeheader()
-        w.writerow(header_out)
+    _csv_append(PEDIDOS_PATH, PEDIDOS_FIELDS, header_out)
 
-    file_exists = os.path.exists(PEDIDOS_DETALLE_PATH) and os.path.getsize(PEDIDOS_DETALLE_PATH)>0
-    with open(PEDIDOS_DETALLE_PATH,"a",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f, fieldnames=DETALLE_FIELDS)
-        if not file_exists: w.writeheader()
-        for i,it in enumerate(items, start=1):
-            id_linea = it.get("id_linea") or f"{header['id_pedido']}-{i}"
-            cantidad = int(it.get("cantidad",0))
-            punit = _to_std_number(it.get("precio_unitario","0"))
-            importe = _to_std_number(it.get("importe","0"))
-            w.writerow({"id_linea":id_linea,"id_pedido":header["id_pedido"],"producto":it.get("producto",""),
-                        "cantidad":cantidad,"cantidad_completada":0,"precio_unitario":punit,"importe":importe})
+    # Detalle
+    for i,it in enumerate(items, start=1):
+        id_linea = it.get("id_linea") or f"{header['id_pedido']}-{i}"
+        cantidad = int(it.get("cantidad",0))
+        punit = _to_std_number(it.get("precio_unitario","0"))
+        importe = _to_std_number(it.get("importe","0"))
+        row = {
+            "id_linea":id_linea,
+            "id_pedido":header["id_pedido"],
+            "producto":it.get("producto",""),
+            "cantidad":cantidad,
+            "cantidad_completada":0,
+            "precio_unitario":punit,
+            "importe":importe
+        }
+        _csv_append(PEDIDOS_DETALLE_PATH, DETALLE_FIELDS, row)
 
 def leer_pedidos():
     if not os.path.exists(PEDIDOS_PATH): ensure_files()
@@ -151,28 +199,77 @@ def leer_pedidos():
     return norm
 
 def leer_items_por_pedido(id_pedido: str):
-    id_pedido=str(id_pedido)
+    id_pedido = str(id_pedido)
     if not os.path.exists(PEDIDOS_DETALLE_PATH): ensure_files()
     with open(PEDIDOS_DETALLE_PATH, newline="", encoding="utf-8-sig") as f:
-        rows=list(csv.DictReader(f))
-    fixed=[]
+        rows = list(csv.DictReader(f))
+
+    # Detectar si hay líneas de este pedido sin id_linea y auto-repararlas
+    need_fix = False
+    used_nums = set()
     for r in rows:
-        if r.get("id_pedido")!=id_pedido: continue
-        cantidad=int((r.get("cantidad") or "0").strip() or 0)
-        cant_comp=int((r.get("cantidad_completada") or "0").strip() or 0)
-        fixed.append({"id_linea":r.get("id_linea") or f"{id_pedido}-X","id_pedido":id_pedido,"producto":r.get("producto",""),
-                      "cantidad":cantidad,"cantidad_completada":cant_comp,"precio_unitario":r.get("precio_unitario",""),
-                      "importe":r.get("importe","")})
+        if str(r.get("id_pedido")) != id_pedido:
+            continue
+        lid = (r.get("id_linea") or "").strip()
+        if lid.startswith(f"{id_pedido}-"):
+            try:
+                n = int(lid.split("-")[-1])
+                used_nums.add(n)
+            except Exception:
+                pass
+        if not lid:
+            need_fix = True
+
+    if need_fix:
+        # Generar consecutivos únicos f"{id_pedido}-<n>"
+        def next_num():
+            n = 1
+            while n in used_nums:
+                n += 1
+            used_nums.add(n)
+            return n
+
+        changed = False
+        for r in rows:
+            if str(r.get("id_pedido")) != id_pedido:
+                continue
+            lid = (r.get("id_linea") or "").strip()
+            if not lid:
+                r["id_linea"] = f"{id_pedido}-{next_num()}"
+                changed = True
+        if changed:
+            _escribir_todas_lineas(rows)  # persistimos la reparación
+
+    # Ahora leemos ya con ids válidos
+    fixed = []
+    for r in rows:
+        if r.get("id_pedido") != id_pedido:
+            continue
+        cantidad = int((r.get("cantidad") or "0").strip() or 0)
+        cant_comp = int((r.get("cantidad_completada") or "0").strip() or 0)
+        fixed.append({
+            "id_linea": r.get("id_linea") or f"{id_pedido}-X",
+            "id_pedido": id_pedido,
+            "producto": r.get("producto",""),
+            "cantidad": cantidad,
+            "cantidad_completada": cant_comp,
+            "precio_unitario": r.get("precio_unitario",""),
+            "importe": r.get("importe","")
+        })
     return fixed
+
 
 def actualizar_cantidad_completada(id_linea: str, nueva_cantidad: int):
     rows=_leer_todas_lineas(); actualizado=False
+    pid=None
     for r in rows:
         if str(r.get("id_linea"))==str(id_linea):
             cantidad=int((r.get("cantidad") or 0))
             r["cantidad_completada"]=str(max(0, min(int(nueva_cantidad), cantidad)))
             actualizado=True; pid=r["id_pedido"]; break
-    if actualizado: _escribir_todas_lineas(rows); recalc_estado_pedido(pid)
+    if actualizado:
+        _escribir_todas_lineas(rows)
+        recalc_estado_pedido(pid)
     return actualizado
 
 def recalc_estado_pedido(id_pedido: str):
@@ -603,4 +700,146 @@ def quitar_descuento_forzado(id_pedido: str) -> bool:
 
     _write_pedidos(pedidos)
     return True
+
+# -------- Soporte a pedidos fantasma --------
+def _id_origen_de_fantasma(id_pedido: str) -> str | None:
+    """
+    Obtiene el id de origen desde el id de un fantasma.
+    Formatos soportados:
+      - Con columna id_origen en CSV (preferente)
+      - Prefijo 'PH-<id_origen>-<timestamp>' sin columna
+    """
+    id_pedido = str(id_pedido or "")
+    if id_pedido.startswith("PH-"):
+        parts = id_pedido.split("-")
+        if len(parts) >= 3:
+            return "-".join(parts[1:-1])
+        elif len(parts) == 2:
+            return parts[1]
+    return None
+
+def _es_pedido_fantasma(p: dict) -> bool:
+    if not p: return False
+    es_flag = str(p.get("es_fantasma","") or "").strip().lower() in ("1","true","yes","y")
+    es_estado = (p.get("estado","") or "").strip().lower() == "fantasma"
+    es_prefijo = str(p.get("id_pedido","") or "").startswith("PH-")
+    return es_flag or es_estado or es_prefijo
+
+def actualizar_cantidades_completadas_batch_sync(id_pedido: str, updates: list[tuple[str,int]]) -> dict:
+    """
+    Aplica el batch al FANTASMA y sube al ORIGEN el avance neto (delta) por producto.
+    El delta se calcula con los valores *que realmente quedaron* en archivo después del batch.
+    Devuelve { id_pedido: estado } incluyendo el origen si aplica.
+    """
+    id_pedido = str(id_pedido)
+
+    # --- util de normalización de producto ---
+    def _norm_prod(s: str) -> str:
+        s = (s or "").strip().lower()
+        return re.sub(r"\s+", " ", s)
+
+    # --- foto 'antes' de completados del FANTASMA ---
+    before_rows = _leer_todas_lineas()
+    before_by_id = { str(r.get("id_linea")): r for r in before_rows }
+    before_comp = {}
+    for id_linea, _ in updates:
+        r = before_by_id.get(str(id_linea))
+        if r and str(r.get("id_pedido")) == id_pedido:
+            try: before_comp[str(id_linea)] = int(r.get("cantidad_completada") or 0)
+            except: before_comp[str(id_linea)] = 0
+
+    # --- aplica batch normal (modifica archivo) ---
+    estados = actualizar_cantidades_completadas_batch(updates)
+
+    # --- valida que sea fantasma ---
+    pedidos = leer_pedidos()
+    ped = next((p for p in pedidos if p.get("id_pedido")==id_pedido), {})
+    if not _es_pedido_fantasma(ped):
+        return estados
+
+    # --- id de ORIGEN ---
+    id_origen = (ped.get("id_origen") or "").strip() or _id_origen_de_fantasma(id_pedido)
+    if not id_origen:
+        return estados
+
+    # --- foto 'después' leída del archivo (lo que *sí quedó*) ---
+    after_rows = _leer_todas_lineas()
+    after_by_id = { str(r.get("id_linea")): r for r in after_rows }
+
+    # Delta por producto normalizado (usando valor 'después')
+    deltas_por_prod: dict[str,int] = {}
+    for id_linea, _asked_value in updates:
+        r_after = after_by_id.get(str(id_linea))
+        if not r_after or str(r_after.get("id_pedido")) != id_pedido:
+            continue
+        try:
+            comp_after = int(r_after.get("cantidad_completada") or 0)
+        except:
+            comp_after = 0
+        comp_before = int(before_comp.get(str(id_linea), 0))
+        delta = max(0, comp_after - comp_before)
+        if delta <= 0:
+            continue
+        prod_norm = _norm_prod(r_after.get("producto",""))
+        deltas_por_prod[prod_norm] = deltas_por_prod.get(prod_norm, 0) + delta
+
+    if not deltas_por_prod:
+        return estados  # no hubo avance neto real
+
+    # --- índice de líneas del ORIGEN por producto ---
+    origen_lines = [r for r in after_rows if str(r.get("id_pedido")) == id_origen]
+    idx_origen: dict[str, list[dict]] = {}
+    for r in origen_lines:
+        idx_origen.setdefault(_norm_prod(r.get("producto","")), []).append(r)
+
+    # --- distribuir delta llenando primeras las líneas con mayor pendiente ---
+    changed = False
+    for prod_norm, delta_total in deltas_por_prod.items():
+        lines = idx_origen.get(prod_norm, [])
+        if not lines or delta_total <= 0:
+            continue
+
+        def pendiente(r):
+            try:
+                c  = int(r.get("cantidad") or 0)
+                cc = int(r.get("cantidad_completada") or 0)
+            except:
+                c, cc = 0, 0
+            return max(0, c - cc)
+
+        lines.sort(key=pendiente, reverse=True)
+
+        rest = int(delta_total)
+        for r in lines:
+            if rest <= 0:
+                break
+            c  = int(r.get("cantidad") or 0) if (r.get("cantidad") or "").isdigit() else int(float(r.get("cantidad") or 0))
+            cc = int(r.get("cantidad_completada") or 0) if (r.get("cantidad_completada") or "0").isdigit() else int(float(r.get("cantidad_completada") or 0))
+            cap = max(0, c - cc)
+            if cap <= 0:
+                continue
+            add = min(cap, rest)
+            if add > 0:
+                r["cantidad_completada"] = str(cc + add)
+                rest -= add
+                changed = True
+        # si queda 'rest', no hay más capacidad; no se sobrepasa 'cantidad'
+
+    # --- persistir y recalcular estados ---
+    if changed:
+        _escribir_todas_lineas(after_rows)
+        try:
+            recalc_estado_pedido(id_origen)
+        except:
+            pass
+        try:
+            # refrescar estados reportados
+            for p in leer_pedidos():
+                if p.get("id_pedido") in (id_pedido, id_origen):
+                    estados[p.get("id_pedido")] = p.get("estado","")
+        except:
+            estados[id_origen] = estados.get(id_origen, "Actualizado")
+
+    return estados
+
 

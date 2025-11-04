@@ -6,12 +6,31 @@ from ui.pdf_utils import generar_pdf_pedido, abrir_pdf
 from data.csv_manager import (
     leer_pedidos,
     leer_items_por_pedido,
-    actualizar_cantidades_completadas_batch,
+    actualizar_cantidades_completadas_batch,    # fallback
+    actualizar_cantidades_completadas_batch_sync,  
     actualizar_pedido_completo,
     cargar_productos,
     cancelar_pedido,
     set_fecha_entrega,
 )
+
+# --------- intento de import de la versión con sincronización ---------
+try:
+    # si tu csv_manager ya tiene esta función, la usamos
+    from data.csv_manager import actualizar_cantidades_completadas_batch_sync  # type: ignore
+    _HAS_SYNC = True
+except Exception:
+    _HAS_SYNC = False
+
+def actualizar_batch_con_sync(id_pedido: str, updates: list[tuple[str,int]]):
+    """
+    Wrapper: si existe actualizar_cantidades_completadas_batch_sync() la usamos.
+    Si no, usamos actualizar_cantidades_completadas_batch() (sin sincronía) para no romper nada.
+    """
+    if _HAS_SYNC:
+        return actualizar_cantidades_completadas_batch_sync(id_pedido, updates)  # type: ignore
+    else:
+        return actualizar_cantidades_completadas_batch(updates)
 
 # Mini calendario (opcional)
 try:
@@ -19,6 +38,44 @@ try:
     _HAS_TKCAL = True
 except Exception:
     _HAS_TKCAL = False
+
+
+def _es_fantasma_row(p: dict) -> bool:
+    """Detecta pedidos fantasma con tolerancia (sin requerir columnas nuevas)."""
+    if not p:
+        return False
+    estado = (p.get("estado", "") or "").strip().lower()
+    flag = str(p.get("es_fantasma", "") or "").strip().lower() in ("1", "true", "yes", "y")
+    pref = str(p.get("id_pedido", "") or "").startswith("PH-")
+    return estado == "fantasma" or flag or pref
+
+def _orden_prioridad(p: dict) -> tuple:
+    """
+    Prioridad de orden:
+    0 = Fantasma (pendiente/parcial)  → al inicio
+    1 = Pedidos normales (pendiente/parcial/completado)
+    2 = Cancelado
+    3 = Fantasma COMPLETADO           → al final
+    Luego por fecha e id para estabilidad visual.
+    """
+    estado = (p.get("estado","") or "").strip().lower()
+    es_fantasma = _es_fantasma_row(p)
+
+    if es_fantasma and estado == "completado":
+        rank = 3                  # al final-del-final
+    elif estado in {"cancelado","cancelada","canceled","cancelled"}:
+        rank = 2
+    elif es_fantasma:
+        rank = 0
+    else:
+        rank = 1
+
+    return (rank, p.get("fecha",""), p.get("id_pedido",""))
+
+
+def _es_fantasma_id_estado(id_pedido: str, estado: str) -> bool:
+    return str(id_pedido or "").startswith("PH-") or (str(estado or "").strip().lower() == "fantasma")
+
 
 class TabPedidos:
     def __init__(self, notebook,
@@ -39,6 +96,24 @@ class TabPedidos:
         self._configure_grid()
         self._init_row_tags()
         self.refrescar()
+    
+    def _orden_prioridad(p: dict) -> tuple:
+        """
+        Prioridad de orden:
+        0 = Fantasma (primero)
+        1 = Otros (pendiente/parcial/completado)
+        2 = Cancelado (al final)
+        Luego ordena suavemente por fecha e id para estabilidad.
+        """
+        estado = (p.get("estado","") or "").strip().lower()
+        if _es_fantasma_row(p):
+            rank = 0
+        elif estado in {"cancelado","cancelada","canceled","cancelled"}:
+            rank = 2
+        else:
+            rank = 1
+        return (rank, p.get("fecha",""), p.get("id_pedido",""))
+
 
     # --------------- helpers ---------------
     def _emit_refresh_all(self):
@@ -57,7 +132,8 @@ class TabPedidos:
 
         ttk.Label(filtro_box, text="Estado:", style=self.label_style).pack(side="left", padx=(0,6))
         self.cmb_estado = ttk.Combobox(
-            filtro_box, values=["Todos","Pendiente","Parcial","Completado","Cancelado"],
+            filtro_box,
+            values=["Todos","Pendiente","Parcial","Completado","Cancelado","Fantasma"],
             state="readonly", width=15
         )
         self.cmb_estado.set("Todos")
@@ -117,16 +193,13 @@ class TabPedidos:
         y1.grid(row=1, column=1, sticky="ns", pady=(10,2))
         x1.grid(row=2, column=0, sticky="ew", padx=(15,0))
 
-
         # Menú contextual: Cancelar pedido + Fecha de entrega
         self._ctx_menu = tk.Menu(self.frame, tearoff=0)
-        self._ctx_menu.add_command(label="Asignar fecha de entrega…", command=self._ctx_set_fecha_entrega)  # <-- NUEVO
-        self._ctx_menu.add_separator()  # <-- NUEVO
+        self._ctx_menu.add_command(label="Asignar fecha de entrega…", command=self._ctx_set_fecha_entrega)
+        self._ctx_menu.add_separator()
         self._ctx_menu.add_command(label="Cancelar pedido…", command=self._ctx_cancelar_pedido)
         self.tree_pedidos.bind("<Button-3>", self._show_ctx_menu)
         self.tree_pedidos.bind("<Control-Button-1>", self._show_ctx_menu)
-
-        y1.grid(row=1, column=1, sticky="ns", pady=(10,5))
 
         # Tabla de detalle
         cols_d = ("id_linea","producto","cantidad","completado","pendiente","precio_unitario","importe")
@@ -149,7 +222,6 @@ class TabPedidos:
         y2.grid(row=3, column=1, sticky="ns", pady=(6,2))
         x2.grid(row=4, column=0, sticky="ew", padx=(15,0), pady=(0,10))
 
-
         # Estado actual
         self._current_pedido = None
         self._current_descuento = "0"
@@ -157,8 +229,7 @@ class TabPedidos:
     def _configure_grid(self):
         self.frame.grid_columnconfigure(0, weight=1)
         self.frame.grid_rowconfigure(1, weight=1)  # pedidos
-        self.frame.grid_rowconfigure(3, weight=2)  # detalle (sube más) 
-
+        self.frame.grid_rowconfigure(3, weight=2)  # detalle
 
     # ---- Tags de color ----
     def _init_row_tags(self):
@@ -167,6 +238,7 @@ class TabPedidos:
         self.tree_pedidos.tag_configure("row_parcial",    background="#f1c40f", foreground="#000000")
         self.tree_pedidos.tag_configure("row_pendiente",  background="#00bcd4", foreground="#000000")
         self.tree_pedidos.tag_configure("row_cancelado",  background="#9e9e9e", foreground="#000000")
+        self.tree_pedidos.tag_configure("row_fantasma",   foreground="#C62828")  # rojo para fantasmas
 
         # Detalle
         self.tree_detalle.tag_configure("d_completado", background="#2ecc71", foreground="#000000")
@@ -193,14 +265,33 @@ class TabPedidos:
             messagebox.showerror("Error", f"No se pudieron leer los pedidos.\n{e}")
             return []
 
-        estado = (self.cmb_estado.get() or "Todos").strip().lower()
-        if estado != "todos":
-            pedidos = [p for p in pedidos if (p.get("estado","").strip().lower() == estado)]
+        estado_sel = (self.cmb_estado.get() or "Todos").strip()
 
-        q = (self.var_buscar.get() or "").strip()
-        if q:
-            pedidos = [p for p in pedidos if q in (p.get("id_pedido",""))]
-        return pedidos
+        # Filtrado por estado, considerando "Fantasma" especial
+        filtrados = []
+        for p in pedidos:
+            es_fantasma = _es_fantasma_row(p)
+            estado_p = (p.get("estado","") or "").strip().capitalize()
+
+            if estado_sel == "Todos":
+                pass
+            elif estado_sel == "Fantasma":
+                if not es_fantasma:
+                    continue
+            else:
+                # filtra por estado estándar (Pendiente/Parcial/Completado/Cancelado)
+                if es_fantasma:
+                    continue  # no mezclar fantasmas en estados normales
+                if estado_p.lower() != estado_sel.lower():
+                    continue
+
+            q = (self.var_buscar.get() or "").strip()
+            if q and q not in (p.get("id_pedido","")):
+                continue
+
+            filtrados.append(p)
+
+        return filtrados
 
     def _limpiar_busqueda(self):
         self.var_buscar.set("")
@@ -213,15 +304,29 @@ class TabPedidos:
         self._current_pedido = None
         self._current_descuento = "0"
 
-        for p in self._obtener_pedidos_filtrados():
+        filtrados = self._obtener_pedidos_filtrados()
+        pedidos_sorted = sorted(filtrados, key=_orden_prioridad)
+        for p in pedidos_sorted:
             estado = (p.get("estado","") or "").strip().lower()
-            tag = "row_pendiente"
-            if estado == "completado":
-                tag = "row_completado"
+            es_fantasma = _es_fantasma_row(p)
+
+            # Priorizar el estado visual: si está completado, va en VERDE aunque sea fantasma
+            if estado == "cancelado":
+                tag = "row_cancelado"
+            elif estado == "completado":
+                tag = "row_completado"   # → VERDE (también para fantasmas completados)
             elif estado == "parcial":
                 tag = "row_parcial"
-            elif estado == "cancelado":
-                tag = "row_cancelado"
+            elif estado == "pendiente":
+                tag = "row_pendiente"
+            else:
+                # Si no hay estado claro y es fantasma, márcalo como fantasma
+                tag = "row_fantasma" if es_fantasma else "row_pendiente"
+
+            # Si sigue siendo fantasma y NO está completado, lo marcamos en rojo
+            if es_fantasma and estado != "completado":
+                tag = "row_fantasma"
+
 
             self.tree_pedidos.insert(
                 "", "end",
@@ -246,9 +351,8 @@ class TabPedidos:
         vals = self.tree_pedidos.item(sel[0])["values"]
         id_pedido = vals[0]
         self._current_pedido = id_pedido
-        self._current_descuento = str(vals[6]) if len(vals) > 6 else "0"  # antes era [5]
-        estado = (vals[5] or "").strip().lower() if len(vals) > 5 else ""  # antes era [4]
-
+        self._current_descuento = str(vals[6]) if len(vals) > 6 else "0"
+        estado = (vals[5] or "").strip().lower() if len(vals) > 5 else ""
 
         try:
             items = leer_items_por_pedido(id_pedido)
@@ -271,31 +375,18 @@ class TabPedidos:
 
     # --------- menú contextual ---------
     def _show_ctx_menu(self, event):
-        # Identifica la fila bajo el cursor
         rowid = self.tree_pedidos.identify_row(event.y)
         if rowid:
-            # Selecciona la fila sobre la que se hizo clic derecho
             self.tree_pedidos.selection_set(rowid)
             vals = self.tree_pedidos.item(rowid).get("values", [])
-            # Si el pedido está cancelado, NO mostramos el menú contextual
             if self._is_row_cancelado(vals):
-                # Opcional: feedback sutil (comenta si no lo quieres)
-                # self.tree_pedidos.bell()
                 return
-
-            # Si NO está cancelado, asegura que las opciones estén habilitadas
             try:
                 self._ctx_menu.entryconfig("Asignar fecha de entrega…", state="normal")
                 self._ctx_menu.entryconfig("Cancelar pedido…", state="normal")
             except Exception:
                 pass
-
-            # Muestra menú
             self._ctx_menu.post(event.x_root, event.y_root)
-        else:
-            # Clic derecho fuera de filas: no mostrar menú
-            return
-
 
     def _ctx_cancelar_pedido(self):
         sel = self.tree_pedidos.selection()
@@ -304,7 +395,7 @@ class TabPedidos:
             return
         vals = self.tree_pedidos.item(sel[0])["values"]
         id_pedido = str(vals[0]) if vals else None
-        cliente = str(vals[2]) if len(vals) > 2 else ""
+        cliente = str(vals[3]) if len(vals) > 3 else ""  # columna correcta: cliente
         if not id_pedido:
             messagebox.showwarning("Atención", "No se pudo determinar el ID del pedido.")
             return
@@ -334,12 +425,10 @@ class TabPedidos:
         self._emit_refresh_all()
 
     def _is_row_cancelado(self, vals):
-        # Columna 'estado' es índice 5 según la definición de cols_p
         estado = (str(vals[5]).strip().lower() if len(vals) > 5 else "")
         return estado in {"cancelado", "cancelada", "canceled", "cancelled"}
 
-
-    # -------- Editor masivo / Editor pedido (sin cambios aquí) --------
+    # -------- Editor masivo / Editor pedido --------
     def _abrir_editor_masivo(self):
         iid = self.tree_pedidos.selection()
         if not iid:
@@ -348,7 +437,10 @@ class TabPedidos:
         vals = self.tree_pedidos.item(iid[0])["values"]
         if not vals:
             return
+
         id_pedido = str(vals[0])
+        estado = (str(vals[5]) if len(vals) > 5 else "").strip().lower()
+        es_fantasma = _es_fantasma_id_estado(id_pedido, estado)
 
         try:
             items = leer_items_por_pedido(id_pedido)
@@ -360,11 +452,13 @@ class TabPedidos:
             self.refrescar()
             self._emit_refresh_all()
 
-        # Abre la ventana de edición de cantidades
         EditorMasivo(
             self.frame, id_pedido, items, on_saved=_saved,
-            frame_style=self.frame_style, button_style=self.button_style, label_style=self.label_style
+            frame_style=self.frame_style, button_style=self.button_style, label_style=self.label_style,
+            use_sync=es_fantasma,
         )
+
+
 
     def _abrir_editor_pedido(self):
         iid = self.tree_pedidos.selection()
@@ -375,11 +469,11 @@ class TabPedidos:
         if not vals:
             return
 
-        # Columnas: ("id_pedido", "fecha", "cliente", "total", "estado", "descuento")
+        # Columnas: ("id_pedido","fecha","fecha_entrega","cliente","total","estado","descuento")
         id_pedido = str(vals[0])
         fecha     = str(vals[1] or "")
-        cliente   = str(vals[2] or "")
-        desc_flag = str(vals[5] or "").strip().lower() in ("1", "true", "sí", "si", "y", "yes")
+        cliente   = str(vals[3] or "")
+        desc_flag = str(vals[6] or "").strip().lower() in ("1", "true", "sí", "si", "y", "yes")
 
         try:
             items = leer_items_por_pedido(id_pedido)
@@ -391,7 +485,6 @@ class TabPedidos:
             self.refrescar()
             self._emit_refresh_all()
 
-        # Abre la ventana de edición completa (producto, cantidad, precio)
         EditorPedido(
             self.frame, id_pedido, cliente, fecha, items, desc_flag,
             on_saved=_saved,
@@ -408,9 +501,9 @@ class TabPedidos:
         if not vals:
             return
         id_pedido = str(vals[0])
-        cliente   = str(vals[2]) if len(vals) > 2 else ""
+        cliente   = str(vals[3]) if len(vals) > 3 else ""  # cliente correcto
         fecha     = str(vals[1]) if len(vals) > 1 else datetime.now().strftime("%Y-%m-%d %H:%M")
-        estado    = (vals[4] or "").strip().lower() if len(vals) > 4 else ""
+        estado    = (vals[5] or "").strip().lower() if len(vals) > 5 else ""
 
         items_raw = leer_items_por_pedido(id_pedido)
         if not items_raw:
@@ -434,7 +527,7 @@ class TabPedidos:
                 items=items,
                 logo_path="logo.png",
                 qr_kind="QR",
-                cancelado = (estado == "cancelado"),  # <-- NUEVO
+                cancelado = (estado == "cancelado"),
             )
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el PDF.\n{e}")
@@ -442,7 +535,7 @@ class TabPedidos:
 
         abrir_pdf(pdf_path)
         messagebox.showinfo("Listo", f"Nota generada (reemplazada si existía).\n\n{os.path.basename(pdf_path)}")
-    
+
     def _get_selected_pedido_id(self):
         sel = self.tree_pedidos.selection()
         if not sel:
@@ -548,13 +641,14 @@ class TabPedidos:
         win.geometry(f"+{x}+{y}")
 
 
-
 # ---------------- Ventana: editor masivo (completados) ----------------
 class EditorMasivo(tk.Toplevel):
     def __init__(self, parent, id_pedido, items, on_saved,
                  frame_style="Dark.TFrame",
                  button_style="Dark.TButton",
-                 label_style="Dark.TLabel"):
+                 label_style="Dark.TLabel",
+                 use_sync=False):
+        
         super().__init__(parent)
         self.title(f"Editar líneas · Pedido {id_pedido}")
         self.transient(parent); self.grab_set(); self.resizable(True, True)
@@ -566,8 +660,13 @@ class EditorMasivo(tk.Toplevel):
         self.button_style = button_style
         self.label_style = label_style
 
+        self.use_sync = bool(use_sync)
+
         # Importamos aquí para evitar circularidad
-        self._actualizar_batch = actualizar_cantidades_completadas_batch
+        if self.use_sync:
+            self._actualizar_batch = actualizar_cantidades_completadas_batch_sync  # <-- usa sync
+        else:
+            self._actualizar_batch = actualizar_cantidades_completadas_batch       # <-- normal
 
         rootf = ttk.Frame(self, style=self.frame_style); rootf.pack(fill="both", expand=True)
         header = ttk.Frame(rootf, style=self.frame_style); header.pack(fill="x", padx=15, pady=(12, 6))
@@ -587,7 +686,6 @@ class EditorMasivo(tk.Toplevel):
         for txt, col in [("ID Línea",0),("Producto",1),("Cant.",2),("Completado",3),("Pendiente",4)]:
             ttk.Label(scrollf, text=txt, style=self.label_style).grid(row=row, column=col, sticky="w", padx=6, pady=4)
 
-        # Validador opcional para Spinbox
         vcmd = (self.register(self._validate_int_or_empty), "%P")
 
         self._line_vars = []
@@ -653,20 +751,31 @@ class EditorMasivo(tk.Toplevel):
             val = max(0, min(val, cant_total))
             updates.append((id_linea, val))
         if not updates:
-            self.destroy(); return
+            self.destroy(); 
+            return
 
         try:
-            res = self._actualizar_batch(updates)  # dict { id_pedido: estado }
+            if self.use_sync:
+                # Fantasma: SIEMPRE usa la función sincronizada y pasa id_pedido
+                res = actualizar_cantidades_completadas_batch_sync(self.id_pedido, updates)
+            else:
+                # Pedido normal
+                res = actualizar_cantidades_completadas_batch(updates)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo guardar el lote.\n{e}")
             return
 
-        nuevo_estado = None
-        if isinstance(res, dict):
-            nuevo_estado = res.get(self.id_pedido)
-
-        if nuevo_estado:
-            messagebox.showinfo("Éxito", f"Cambios guardados.\nNuevo estado: {nuevo_estado}")
+        # Mensajería
+        if isinstance(res, dict) and res:
+            if len(res) > 1:
+                resumen = "\n".join([f"{k}: {v}" for k, v in sorted(res.items())])
+                messagebox.showinfo("Éxito", f"Cambios guardados.\nEstados:\n{resumen}")
+            else:
+                nuevo_estado = res.get(self.id_pedido)
+                if nuevo_estado:
+                    messagebox.showinfo("Éxito", f"Cambios guardados.\nNuevo estado: {nuevo_estado}")
+                else:
+                    messagebox.showinfo("Éxito", "Cambios guardados.")
         else:
             messagebox.showinfo("Éxito", "Cambios guardados.")
 
@@ -675,7 +784,8 @@ class EditorMasivo(tk.Toplevel):
         self.destroy()
 
 
-# ---------------- Ventana: editor completo del pedido (sugerencias + precio según descuento) ----------------
+
+# ---------------- Ventana: editor completo del pedido ----------------
 class EditorPedido(tk.Toplevel):
     """
     - Sugiere productos conforme tecleas (Entry + Listbox flotante por fila)
@@ -700,7 +810,6 @@ class EditorPedido(tk.Toplevel):
         self.button_style = button_style
         self.label_style = label_style
 
-        # Catálogo para sugerencias y precios
         try:
             catalogo = cargar_productos()
         except Exception:
@@ -751,8 +860,7 @@ class EditorPedido(tk.Toplevel):
         for txt, col, anchor in [("ID Línea",0,"w"),("Producto",1,"w"),("Cantidad",2,"e"),("P.Unit",3,"e"),("Importe",4,"e")]:
             ttk.Label(self.tablef, text=txt, style=self.label_style).grid(row=row, column=col, sticky=anchor, padx=6, pady=4)
 
-        # Filas editables con sugerencias
-        self._rows = []  # [(id_linea, entry_prod, var_prod, var_cant, var_pu, lbl_imp, sugg_win), ...]
+        self._rows = []
         for it in self.items:
             row += 1
             id_linea = it.get("id_linea","")
@@ -806,7 +914,6 @@ class EditorPedido(tk.Toplevel):
         self.lbl_total = ttk.Label(bottom, text="0.00", style=self.label_style); self.lbl_total.pack(side="left", padx=(6,0))
         ttk.Button(bottom, text="Guardar", command=self._guardar, style=self.button_style).pack(side="right")
         ttk.Button(bottom, text="Cancelar", command=self.destroy, style=self.button_style).pack(side="right", padx=(6,0))
-
 
         self._recalc_total()
         self.geometry("1000x650+120+80")
@@ -867,7 +974,6 @@ class EditorPedido(tk.Toplevel):
         limpp = ttk.Label(self.tablef, text="0.00", style=self.label_style)
         limpp.grid(row=row, column=4, sticky="e", padx=6, pady=3)
 
-        # Sugerencias
         try:
             sugg = SuggestPopup(
                 self, ent_prod, self.product_names,
@@ -876,12 +982,10 @@ class EditorPedido(tk.Toplevel):
         except NameError:
             sugg = None
 
-        # Evita dobles submits por Enter
         ent_prod.bind("<Return>", lambda e: "break")
         sp_q.bind("<Return>", lambda e: "break")
         ent_pu.bind("<Return>", lambda e: "break")
 
-        # Recalcular importe y total
         def recalc(*_):
             try:
                 q = max(0, int(str(vcant.get() or "0")))
@@ -923,13 +1027,11 @@ class EditorPedido(tk.Toplevel):
             messagebox.showerror("Error", "Cliente no puede estar vacío.")
             return
         try:
-            # Formato esperado: YYYY-MM-DD HH:MM
             datetime.strptime(fecha, "%Y-%m-%d %H:%M")
         except Exception:
             messagebox.showerror("Error", "Fecha inválida. Usa formato YYYY-MM-DD HH:MM")
             return
 
-        # --- Normalizador de precio ---
         def norm_price(txt: str) -> float:
             if txt is None:
                 return 0.0
@@ -938,52 +1040,35 @@ class EditorPedido(tk.Toplevel):
                 return 0.0
             has_c = "," in s; has_d = "." in s
             if has_c and has_d:
-                # si la última coma está después del último punto -> coma decimal
                 if s.rfind(",") > s.rfind("."):
-                    s = s.replace(".", "")
-                    s = s.replace(",", ".")
+                    s = s.replace(".", ""); s = s.replace(",", ".")
                 else:
                     s = s.replace(",", "")
             elif has_c and not has_d:
                 s = s.replace(",", ".") if s.count(",") == 1 else s.replace(",", "")
             else:
                 if s.count(".") > 1:
-                    parts = s.split(".")
-                    s = "".join(parts[:-1]) + "." + parts[-1]
+                    parts = s.split("."); s = "".join(parts[:-1]) + "." + parts[-1]
             try:
                 return float(s)
             except Exception:
                 return 0.0
 
-        # --- Construcción de líneas válidas evitando duplicados ---
         nuevas = []
         seen_ids = set()
         for (id_linea, ent, vprod, q, vpu, limpp, _sugg) in self._rows:
             line_id = str(id_linea or "").strip()
             prod = (vprod.get() or "").strip()
-
-            # cantidad
             try:
                 cant = int(q.get() or 0)
             except Exception:
                 cant = 0
-
-            # precio unitario normalizado
             pu_val = norm_price((vpu.get() or "0").strip())
-
-            # *** REGLA CLAVE: si cantidad == 0, NO guardamos esta línea ***
-            if cant <= 0:
+            if cant <= 0 or not prod:
                 continue
-
-            # si no hay producto, descartar también
-            if not prod:
-                continue
-
-            # evita duplicados de id_linea
             if line_id in seen_ids:
                 continue
             seen_ids.add(line_id)
-
             nuevas.append({
                 "id_linea": line_id,
                 "producto": prod,
@@ -996,7 +1081,6 @@ class EditorPedido(tk.Toplevel):
             if not messagebox.askyesno("Confirmar", "Todas las líneas quedaron en 0 o vacías.\n¿Guardar el pedido SIN líneas?"):
                 return
 
-        # --- Persistencia ---
         try:
             actualizar_pedido_completo(self.id_pedido, cliente, fecha, nuevas)
         except Exception as e:
@@ -1009,8 +1093,7 @@ class EditorPedido(tk.Toplevel):
         self.destroy()
 
 
-
-# ---------- Sugerencias tipo “Nueva Nota” (Entry + Listbox flotante) ----------
+# ---------- Sugerencias tipo “Nueva Nota” ----------
 class SuggestPopup:
     """
     Lista de sugerencias flotante para un Entry.

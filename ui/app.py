@@ -4,6 +4,7 @@ from ui.tab_nueva_nota import TabNuevaNota
 from ui.tab_pedidos import TabPedidos
 from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
+from ui.tab_control_entregas import TabControlEntregas 
 import tkinter.font as tkfont 
 import json, os
 
@@ -149,6 +150,16 @@ class NotaVentaApp:
                                       tree_style="Dark.Treeview")
         notebook.add(self.tab_nota.frame, text="Nueva Nota")
         notebook.add(self.tab_pedidos.frame, text="Pedidos")
+
+        self.tab_ctrl_ent = TabControlEntregas(
+            notebook,
+            frame_style="Dark.TFrame",
+            tree_style="Dark.Treeview",
+            button_style="Dark.TButton",
+            label_style="Dark.TLabel",
+            on_refresh_all=self.refresh_all
+        )
+        notebook.add(self.tab_ctrl_ent.frame, text="Control de entregas")
         
         self.tab_cobranza = TabCobranza(
             notebook,
@@ -159,6 +170,8 @@ class NotaVentaApp:
             label_style="Dark.TLabel"
         )
         notebook.add(self.tab_cobranza.frame, text="Cobranza")
+
+        
 
 
 
@@ -232,6 +245,10 @@ class NotaVentaApp:
         try:
             self._apply_scale()
         except Exception:
+            pass
+        try: 
+            self.tab_ctrl.refrescar()      # <<--- IMPORTANTE: incluir Control de Entregas
+        except:
             pass
 
     
