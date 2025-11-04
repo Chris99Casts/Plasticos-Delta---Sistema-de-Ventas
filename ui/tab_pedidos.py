@@ -14,6 +14,26 @@ from data.csv_manager import (
     set_fecha_entrega,
 )
 
+from datetime import datetime
+
+# --- Parser de fecha flexible ---
+def _parse_fecha_flexible(s: str) -> datetime:
+    s = (s or "").strip()
+    formatos = [
+        "%Y-%m-%d %H:%M",   # 2025-10-20 19:12
+        "%d/%m/%Y %H:%M",   # 20/10/2025 19:12
+        "%d-%m-%Y %H:%M",   # 20-10-2025 19:12
+        "%Y/%m/%d %H:%M",   # 2025/10/20 19:12
+        "%d.%m.%Y %H:%M",   # 20.10.2025 19:12 (por si acaso)
+    ]
+    for f in formatos:
+        try:
+            return datetime.strptime(s, f)
+        except Exception:
+            pass
+    # Si llega aquí, no se pudo parsear
+    raise ValueError("Formato no reconocido")
+
 # --------- intento de import de la versión con sincronización ---------
 try:
     # si tu csv_manager ya tiene esta función, la usamos
@@ -1027,9 +1047,16 @@ class EditorPedido(tk.Toplevel):
             messagebox.showerror("Error", "Cliente no puede estar vacío.")
             return
         try:
-            datetime.strptime(fecha, "%Y-%m-%d %H:%M")
+            dt = _parse_fecha_flexible(fecha)
+            # normaliza a canónico antes de guardar
+            fecha = dt.strftime("%Y-%m-%d %H:%M")
         except Exception:
-            messagebox.showerror("Error", "Fecha inválida. Usa formato YYYY-MM-DD HH:MM")
+            messagebox.showerror(
+                "Error",
+                "Fecha inválida. Usa por ejemplo:\n"
+                "• 2025-10-20 19:12  (YYYY-MM-DD HH:MM)\n"
+                "• 20/10/2025 19:12  (DD/MM/YYYY HH:MM)"
+            )
             return
 
         def norm_price(txt: str) -> float:
