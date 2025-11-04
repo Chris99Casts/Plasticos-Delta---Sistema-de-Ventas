@@ -36,7 +36,7 @@ def _to_std_number(num_str: str) -> str:
 PEDIDOS_FIELDS = [
     "id_pedido","fecha","cliente","total","estado",
     "descuento","pagado","descuento_pago_pct","total_cobro",
-    "fecha_entrega","exento_minimo_desc",
+    "fecha_entrega","exento_minimo_desc","no_factura"
 ]
 DETALLE_FIELDS = ["id_linea","id_pedido","producto","cantidad","cantidad_completada","precio_unitario","importe"]
 
@@ -152,6 +152,7 @@ def _write_pedidos(rows):
     # Normaliza y delega. Si rows vacío y el archivo ya tiene datos, no se sobrescribe.
     rows = list(rows or [])
     for p in rows:
+        p.setdefault("no_factura","")
         p.setdefault("fecha_entrega","")
         p.setdefault("exento_minimo_desc","0")
     _csv_rewrite(PEDIDOS_PATH, PEDIDOS_FIELDS, rows)
@@ -164,7 +165,8 @@ def registrar_pedido(header: dict, items: list[dict]):
         "total":header["total"], "estado":header["estado"],
         "descuento":"1" if desc in ("1","true","True","si","sí") else "0",
         "pagado":"0", "descuento_pago_pct":"", "total_cobro":"",
-        "fecha_entrega":"", "exento_minimo_desc":"0",
+        "fecha_entrega":"", "exento_minimo_desc":"0", "no_factura":"",                             # <-- nuevo
+
     }
     _csv_append(PEDIDOS_PATH, PEDIDOS_FIELDS, header_out)
 
@@ -194,7 +196,7 @@ def leer_pedidos():
         rr={ (k or "").strip():(v or "").strip() for k,v in r.items() }
         rr.setdefault("descuento","0"); rr.setdefault("pagado","0")
         rr.setdefault("descuento_pago_pct",""); rr.setdefault("total_cobro",""); rr.setdefault("estado","Pendiente")
-        rr.setdefault("fecha_entrega",""); rr.setdefault("exento_minimo_desc","0")
+        rr.setdefault("fecha_entrega",""); rr.setdefault("exento_minimo_desc","0"); rr.setdefault("no_factura","")
         norm.append(rr)
     return norm
 
@@ -842,4 +844,15 @@ def actualizar_cantidades_completadas_batch_sync(id_pedido: str, updates: list[t
 
     return estados
 
-
+def set_no_factura(id_pedido: str, no_factura: str) -> bool:
+    id_pedido = str(id_pedido)
+    pedidos = leer_pedidos()
+    changed = False
+    for p in pedidos:
+        if p.get("id_pedido") == id_pedido:
+            p["no_factura"] = (no_factura or "").strip()
+            changed = True
+            break
+    if changed:
+        _write_pedidos(pedidos)
+    return changed

@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, date
+from tkinter import simpledialog 
 from data.csv_manager import (
     leer_pedidos,
     total_cobro_actual,
@@ -11,6 +12,7 @@ from data.csv_manager import (
     quitar_descuento_forzado,
     registrar_abono,
     leer_abonos,
+    set_no_factura,
 )
 
 # Intentar importar tkcalendar (mini calendario)
@@ -67,7 +69,7 @@ class TabCobranza:
         ttk.Button(box, text="Limpiar", command=self._limpiar, style=self.button_style).pack(side="left", padx=(6,0))
 
         cols = (
-            "id_pedido","fecha","fecha_entrega","cliente","total",
+            "id_pedido","fecha","fecha_entrega","no_factura","cliente","total",
             "preferencial","estado_surtido","pagado",
             "elegible10","dias_entrega",
             "total_cobro_actual","abonado","saldo",
@@ -77,6 +79,7 @@ class TabCobranza:
             "id_pedido":"ID",
             "fecha":"Fecha pedido",
             "fecha_entrega":"Fecha entrega",
+            "no_factura":"No. factura",
             "cliente":"Cliente",
             "total":"Total",
             "preferencial":"Preferencial",
@@ -95,7 +98,7 @@ class TabCobranza:
         for c in cols:
             self.tree.heading(c, text=headers[c])
             width_map = {
-                "id_pedido":110, "fecha":120, "fecha_entrega":140, "cliente":220, "total":100,
+                "id_pedido":110, "fecha":120, "fecha_entrega":140, "no_factura":130,"cliente":220, "total":100,
                 "preferencial":95, "estado_surtido":110, "pagado":70, "elegible10":95,
                 "dias_entrega":120, "total_cobro_actual":160, "abonado":110, "saldo":110,
                 "desc_fijo_pct":105, "total_fijo":110
@@ -110,6 +113,9 @@ class TabCobranza:
         self._ctx.add_separator()
         self._ctx.add_command(label="Aplicar descuento forzado 10%…", command=self._aplicar_desc_forzado)
         self._ctx.add_command(label="Quitar descuento forzado…", command=self._quitar_desc_forzado)
+        self._ctx.add_command(label="Registrar factura…", command=self._menu_registrar_factura)  # <-- nuevo
+        self._ctx.add_separator()
+
 
         self.tree.bind("<Button-3>", self._show_ctx)
         self.tree.bind("<Control-Button-1>", self._show_ctx)
@@ -248,10 +254,11 @@ class TabCobranza:
             elif abonado > 0:
                 tag = "parc"
 
+            no_factura = (r.get("no_factura","") or "").strip() or "N/A"
             self.tree.insert(
                 "", "end",
                 values=(
-                    pid, fecha, fecha_entrega, cliente, f"{total_pedido:.2f}",
+                    pid, fecha, fecha_entrega, no_factura, cliente, f"{total_pedido:.2f}",
                     preferencial, estado_surtido, pagado,
                     elegible, (dias_entrega if isinstance(dias_entrega, int) else "N/A"),
                     f"{objetivo_actual:.2f}", f"{abonado:.2f}", f"{saldo:.2f}",
@@ -450,5 +457,28 @@ class TabCobranza:
         if ok:
             messagebox.showinfo("Listo", f"Descuento forzado eliminado en {pid}.")
             self.refrescar(); self._emit_refresh_all()
+        else:
+            messagebox.showinfo("Info", "No se realizaron cambios.")
+    
+    # --- Registrar No. de factura
+    def _menu_registrar_factura(self):
+        pid = self._get_selected_id()
+        if not pid:
+            messagebox.showwarning("Atención", "Selecciona un pedido.")
+            return
+        # Pide el No. de factura (permite también limpiar dejándolo vacío)
+        nofac = simpledialog.askstring("Registrar factura", "No. de factura (deja vacío para limpiar):",
+                                    parent=self.frame)
+        if nofac is None:
+            return  # cancelado
+        try:
+            ok = set_no_factura(pid, nofac.strip())
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo registrar la factura.\n{e}")
+            return
+        if ok:
+            messagebox.showinfo("Listo", f"Factura {'registrada' if nofac.strip() else 'eliminada'} para {pid}.")
+            self.refrescar()
+            self._emit_refresh_all()
         else:
             messagebox.showinfo("Info", "No se realizaron cambios.")
