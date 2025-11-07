@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, date
 from tkinter import simpledialog 
+import os, json, secrets, hashlib
 from data.csv_manager import (
     leer_pedidos,
     total_cobro_actual,
@@ -14,6 +15,12 @@ from data.csv_manager import (
     leer_abonos,
     set_no_factura,
 )
+
+# Misma ruta/usuario/semilla que TabNuevaNota
+ADMIN_CFG = os.path.join(os.getcwd(), "admin_cfg.json")
+ADMIN_USER = "JPerez"
+DEFAULT_ADMIN_PASS = "18062002"
+
 
 # Intentar importar tkcalendar (mini calendario)
 _HAS_TKCAL = False
@@ -40,15 +47,50 @@ class TabCobranza:
         self.frame = ttk.Frame(notebook, style=self.frame_style)
         self._dlg_abono = None   # ventana de abonos (evitar múltiples)
 
-        self._build_ui()
-        self._configure_grid()
-        self._init_row_tags()
-        self.refrescar()
+        # Estado inicial bloqueado
+        self._unlocked = False
+        self.tree = None  # <- importante para que refrescar() pueda checar
+        self._build_locked_gate()
+    
+    # ------------------- Admin -----------------------------
+
+    def _admin_load_cfg(self):
+        # si no existe, inicializa con pass por defecto (mismo comportamiento que Nueva Nota)
+        try:
+            with open(ADMIN_CFG, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"user": ADMIN_USER, "salt": secrets.token_hex(16), "hash": ""}
+
+        if not data.get("hash"):
+            # primer uso: genera hash de DEFAULT_ADMIN_PASS
+            data["user"] = ADMIN_USER
+            if not data.get("salt"):
+                data["salt"] = secrets.token_hex(16)
+            data["hash"] = hashlib.sha256((DEFAULT_ADMIN_PASS + data["salt"]).encode("utf-8")).hexdigest()
+            try:
+                with open(ADMIN_CFG, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        return data
+
+    def _admin_check(self, user, password):
+        cfg = self._admin_load_cfg()
+        if (user or "").strip() != (cfg.get("user") or ADMIN_USER):
+            return False
+        salt = cfg.get("salt") or ""
+        expect = cfg.get("hash") or ""
+        h = hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+        return h == expect
+
 
     # ------------------- Emitir refresh ----------------------
     def _emit_refresh_all(self):
         if callable(self.on_refresh_all):
             self.on_refresh_all()
+
+    
 
     # ------------------- UI principal ------------------------
     def _build_ui(self):
@@ -208,7 +250,11 @@ class TabCobranza:
             rows = [r for r in rows if q in (r.get("id_pedido",""))]
         return rows
 
-    def refrescar(self):
+    def refrescar(self, *args, **kwargs):
+        # Si aún no está desbloqueado o no existe el Treeview, no hacer nada
+        if not getattr(self, "_unlocked", False) or getattr(self, "tree", None) is None:
+            return
+       
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         self._current = None
@@ -482,3 +528,67 @@ class TabCobranza:
             self._emit_refresh_all()
         else:
             messagebox.showinfo("Info", "No se realizaron cambios.")
+    
+    # ------------------- Pantalla bloqueada ------------------------
+    def _build_locked_gate(self):
+        # Limpia por si acaso
+        for w in self.frame.winfo_children():
+            w.destroy()
+        gate = ttk.Frame(self.frame, style=self.frame_style, padding=20)
+        gate.grid(row=0, column=0, sticky="nsew")
+        self.frame.grid_rowconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(0, weight=1)
+
+        lbl = ttk.Label(gate, text="Cobranza bloqueada", style=self.label_style)
+        lbl.grid(row=0, column=0, pady=(0,10))
+        btn = ttk.Button(gate, text="Acceder…", command=self._login_gate, style=self.button_style)
+        btn.grid(row=1, column=0)
+        btn.focus_set()
+
+    def _login_gate(self):
+        win = tk.Toplevel(self.frame)
+        win.title("Acceso a Cobranza")
+        win.transient(self.frame.winfo_toplevel())
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12); frm.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(frm, text="Usuario:", style=self.label_style).grid(row=0, column=0, sticky="e", padx=(0,6), pady=4)
+        v_user = tk.StringVar(value=ADMIN_USER)
+        ttk.Entry(frm, textvariable=v_user, width=26).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(frm, text="Contraseña:", style=self.label_style).grid(row=1, column=0, sticky="e", padx=(0,6), pady=4)
+        v_pass = tk.StringVar()
+        ttk.Entry(frm, textvariable=v_pass, width=26, show="•").grid(row=1, column=1, sticky="w")
+
+        btns = ttk.Frame(frm, style=self.frame_style); btns.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8,0))
+        def _ok():
+            if self._admin_check(v_user.get(), v_pass.get()):
+                try:
+                    win.grab_release()
+                except Exception:
+                    pass
+                win.destroy()
+                self._unlock_and_build()
+            else:
+                messagebox.showerror("Acceso", "Usuario o contraseña incorrectos.", parent=win)
+
+        ttk.Button(btns, text="Entrar", command=_ok, style=self.button_style).pack(side="right")
+        ttk.Button(btns, text="Cancelar", command=win.destroy, style=self.button_style).pack(side="right", padx=(0,8))
+
+        win.update_idletasks()
+        parent = self.frame.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width()//2 - win.winfo_width()//2)
+        y = parent.winfo_rooty() + (parent.winfo_height()//2 - win.winfo_height()//2)
+        win.geometry(f"+{x}+{y}")
+
+    def _unlock_and_build(self):
+        self._unlocked = True
+        # Reemplaza la pantalla bloqueada por la UI real:
+        for w in self.frame.winfo_children():
+            w.destroy()
+        self._build_ui()
+        self._configure_grid()
+        self._init_row_tags()
+        self.refrescar()
+
