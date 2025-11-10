@@ -14,7 +14,41 @@ from data.csv_manager import (
     set_fecha_entrega,
 )
 
-from datetime import datetime
+
+# === Helpers de fecha para mostrar HH:MM pero filtrar por día ===
+def _try_parse_dt(s: str):
+    s = (s or "").strip()
+    if not s:
+        return None
+    formatos = [
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%d-%m-%Y %H:%M",
+        "%Y/%m/%d %H:%M",
+        "%Y.%m.%d %H:%M",
+        "%Y-%m-%d",        # por si llega sin hora
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+    ]
+    for f in formatos:
+        try:
+            return datetime.strptime(s, f)
+        except Exception:
+            pass
+    return None
+
+def _fmt_dt_show(s: str) -> str:
+    """Lo que se MUESTRA: normaliza a 'YYYY-MM-DD HH:MM' si se puede."""
+    dt = _try_parse_dt(s)
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else (s or "")
+
+def _date_key(s: str) -> str:
+    """Clave para FILTRAR: solo la fecha 'YYYY-MM-DD' si parsea."""
+    dt = _try_parse_dt(s)
+    return dt.strftime("%Y-%m-%d") if dt else (s or "")
+
 
 # --- Parser de fecha flexible ---
 def _parse_fecha_flexible(s: str) -> datetime:
@@ -110,30 +144,18 @@ class TabPedidos:
         self.label_style = label_style
         self.on_refresh_all = on_refresh_all
 
+        # Estado para filtros “tipo Excel” y orden
+        self._raw_pedidos = []      # datos completos (sin filtrar)
+        self._active_filters = {}   # {col_id: set(valores_permitidos)}
+        self._sort_state = {}       # {col_id: True=asc, False=desc}
+        self._last_sort_col = None  # última columna usada para ordenar
+
         self.frame = ttk.Frame(notebook, style=self.frame_style)
 
         self._build_ui()
         self._configure_grid()
         self._init_row_tags()
         self.refrescar()
-    
-    def _orden_prioridad(p: dict) -> tuple:
-        """
-        Prioridad de orden:
-        0 = Fantasma (primero)
-        1 = Otros (pendiente/parcial/completado)
-        2 = Cancelado (al final)
-        Luego ordena suavemente por fecha e id para estabilidad.
-        """
-        estado = (p.get("estado","") or "").strip().lower()
-        if _es_fantasma_row(p):
-            rank = 0
-        elif estado in {"cancelado","cancelada","canceled","cancelled"}:
-            rank = 2
-        else:
-            rank = 1
-        return (rank, p.get("fecha",""), p.get("id_pedido",""))
-
 
     # --------------- helpers ---------------
     def _emit_refresh_all(self):
@@ -158,15 +180,15 @@ class TabPedidos:
         )
         self.cmb_estado.set("Todos")
         self.cmb_estado.pack(side="left")
-        self.cmb_estado.bind("<<ComboboxSelected>>", lambda e: self.refrescar())
+        self.cmb_estado.bind("<<ComboboxSelected>>", lambda e: self._pintar_tree_aplicando_filtros_y_orden())
 
         ttk.Label(filtro_box, text="Pedido #:", style=self.label_style).pack(side="left", padx=(12,6))
         self.var_buscar = tk.StringVar()
         ent_buscar = ttk.Entry(filtro_box, textvariable=self.var_buscar, width=18)
         ent_buscar.pack(side="left")
-        ent_buscar.bind("<Return>", lambda e: self.refrescar())
+        ent_buscar.bind("<Return>", lambda e: self._pintar_tree_aplicando_filtros_y_orden())
 
-        ttk.Button(filtro_box, text="Buscar", command=self.refrescar, style=self.button_style)\
+        ttk.Button(filtro_box, text="Buscar", command=self._pintar_tree_aplicando_filtros_y_orden, style=self.button_style)\
             .pack(side="left", padx=(6,0))
         ttk.Button(filtro_box, text="Limpiar", command=self._limpiar_busqueda, style=self.button_style)\
             .pack(side="left", padx=(6,0))
@@ -190,19 +212,21 @@ class TabPedidos:
         self.btn_pdf.grid(row=0, column=10, padx=(6, 0), sticky="w")
 
         # Tabla de pedidos
-        cols_p = ("id_pedido", "fecha", "fecha_entrega", "cliente", "total", "estado", "descuento")
-        self.tree_pedidos = ttk.Treeview(self.frame, columns=cols_p, show="headings",
+        self._cols_p = ("id_pedido", "fecha", "fecha_entrega", "cliente", "total", "estado", "descuento")
+        self.tree_pedidos = ttk.Treeview(self.frame, columns=self._cols_p, show="headings",
                                         height=11, style=self.tree_style)
 
         headers = {
             "id_pedido":"ID", "fecha":"Fecha", "fecha_entrega":"Entrega",
             "cliente":"Cliente", "total":"Total", "estado":"Estado", "descuento":"Desc."
         }
-        for col in cols_p:
+        for col in self._cols_p:
             self.tree_pedidos.heading(col, text=headers[col])
             self.tree_pedidos.column(col, anchor="center")
 
+        # Selección y FILTROS/ORDEN por encabezado
         self.tree_pedidos.bind("<<TreeviewSelect>>", self._on_select_pedido)
+        self.tree_pedidos.bind("<Button-1>", self._on_tree_click_heading)  # encabezado: filtros/orden
 
         # Scrollbars
         y1 = ttk.Scrollbar(self.frame, orient="vertical", command=self.tree_pedidos.yview)
@@ -277,87 +301,400 @@ class TabPedidos:
             return "d_completado"
         return "d_parcial"
 
-    # ---------------- Lógica ----------------
-    def _obtener_pedidos_filtrados(self):
-        try:
-            pedidos = leer_pedidos()
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudieron leer los pedidos.\n{e}")
-            return []
-
-        estado_sel = (self.cmb_estado.get() or "Todos").strip()
-
-        # Filtrado por estado, considerando "Fantasma" especial
-        filtrados = []
-        for p in pedidos:
-            es_fantasma = _es_fantasma_row(p)
-            estado_p = (p.get("estado","") or "").strip().capitalize()
-
-            if estado_sel == "Todos":
-                pass
-            elif estado_sel == "Fantasma":
-                if not es_fantasma:
-                    continue
-            else:
-                # filtra por estado estándar (Pendiente/Parcial/Completado/Cancelado)
-                if es_fantasma:
-                    continue  # no mezclar fantasmas en estados normales
-                if estado_p.lower() != estado_sel.lower():
-                    continue
-
-            q = (self.var_buscar.get() or "").strip()
-            if q and q not in (p.get("id_pedido","")):
-                continue
-
-            filtrados.append(p)
-
-        return filtrados
-
-    def _limpiar_busqueda(self):
-        self.var_buscar.set("")
-        self.refrescar()
-
+    # ---------------- NUEVA LÓGICA: Excel-like filters + orden ----------------
     def refrescar(self):
+        """Recarga datos crudos y repinta aplicando filtros/orden."""
         for t in (self.tree_pedidos, self.tree_detalle):
             for item in t.get_children():
                 t.delete(item)
         self._current_pedido = None
         self._current_descuento = "0"
 
-        filtrados = self._obtener_pedidos_filtrados()
-        pedidos_sorted = sorted(filtrados, key=_orden_prioridad)
-        for p in pedidos_sorted:
+        try:
+            self._raw_pedidos = leer_pedidos()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron leer los pedidos.\n{e}")
+            self._raw_pedidos = []
+
+        self._pintar_tree_aplicando_filtros_y_orden()
+
+    def _limpiar_busqueda(self):
+        """Limpia filtros de la barra superior y los filtros por columna."""
+        self.var_buscar.set("")
+        self._active_filters.clear()
+        self._last_sort_col = None
+        self._sort_state.clear()
+        self._pintar_tree_aplicando_filtros_y_orden()
+
+    def _filtrar_por_ui_superior(self, pedidos):
+        """Aplica filtros existentes (Estado y Pedido#)."""
+        estado_sel = (self.cmb_estado.get() or "Todos").strip()
+        q = (self.var_buscar.get() or "").strip()
+
+        out = []
+        for p in pedidos:
+            es_fantasma = _es_fantasma_row(p)
+            estado_p = (p.get("estado","") or "").strip().capitalize()
+
+            # 1) Estado
+            if estado_sel == "Todos":
+                pass
+            elif estado_sel == "Fantasma":
+                if not es_fantasma:
+                    continue
+            else:
+                if es_fantasma:
+                    continue
+                if estado_p.lower() != estado_sel.lower():
+                    continue
+
+            # 2) Pedido #
+            if q and q not in (p.get("id_pedido","")):
+                continue
+
+            out.append(p)
+        return out
+
+    def _aplicar_filtros_header(self, rows):
+        out = []
+        for r in rows:
+            ok = True
+            for col_key, allowed in self._active_filters.items():
+                if not allowed:  # si quedó vacío, no hay coincidencias
+                    ok = False
+                    break
+                val = (r.get(col_key) or "")
+                # Para fechas, compara por día únicamente
+                if col_key in ("fecha", "fecha_entrega"):
+                    val = _date_key(val)
+                if val not in allowed:
+                    ok = False
+                    break
+            if ok:
+                out.append(r)
+        return out
+
+
+    def _pintar_tree_aplicando_filtros_y_orden(self):
+        """Combinación: filtros de barra superior + filtros por columna + orden."""
+        # 1) Filtros “barra superior”
+        datos = self._filtrar_por_ui_superior(self._raw_pedidos)
+
+        # 2) Filtros por encabezado (tipo Excel)
+        datos = self._aplicar_filtros_header(datos)
+
+        # 3) Orden
+        if self._last_sort_col:
+            asc = self._sort_state.get(self._last_sort_col, True)
+            datos.sort(key=lambda r: (r.get(self._last_sort_col) or ""), reverse=not asc)
+        else:
+            # orden estable por prioridad si no hay columna seleccionada
+            datos = sorted(datos, key=_orden_prioridad)
+
+        # 4) Repintar
+        for item in self.tree_pedidos.get_children():
+            self.tree_pedidos.delete(item)
+
+        for p in datos:
             estado = (p.get("estado","") or "").strip().lower()
             es_fantasma = _es_fantasma_row(p)
 
-            # Priorizar el estado visual: si está completado, va en VERDE aunque sea fantasma
             if estado == "cancelado":
                 tag = "row_cancelado"
             elif estado == "completado":
-                tag = "row_completado"   # → VERDE (también para fantasmas completados)
+                tag = "row_completado"
             elif estado == "parcial":
                 tag = "row_parcial"
             elif estado == "pendiente":
                 tag = "row_pendiente"
             else:
-                # Si no hay estado claro y es fantasma, márcalo como fantasma
                 tag = "row_fantasma" if es_fantasma else "row_pendiente"
-
-            # Si sigue siendo fantasma y NO está completado, lo marcamos en rojo
             if es_fantasma and estado != "completado":
                 tag = "row_fantasma"
-
 
             self.tree_pedidos.insert(
                 "", "end",
                 values=(
-                    p.get("id_pedido",""), p.get("fecha",""), p.get("fecha_entrega",""),
-                    p.get("cliente",""), p.get("total",""),
-                    p.get("estado",""), p.get("descuento","0")
+                    p.get("id_pedido",""),
+                    _fmt_dt_show(p.get("fecha","")),           # ← muestra con HH:MM
+                    _fmt_dt_show(p.get("fecha_entrega","")),   # ← muestra con HH:MM
+                    p.get("cliente",""),
+                    p.get("total",""),
+                    p.get("estado",""),
+                    p.get("descuento","0")
                 ),
                 tags=(tag,)
             )
 
+        # 5) Actualizar el texto de encabezados para indicar filtros activos (•)
+        headers = {
+            "id_pedido":"ID", "fecha":"Fecha", "fecha_entrega":"Entrega",
+            "cliente":"Cliente", "total":"Total", "estado":"Estado", "descuento":"Desc."
+        }
+        for col in self._cols_p:
+            base = headers[col]
+            mark = " •" if col in self._active_filters else ""
+            self.tree_pedidos.heading(col, text=base + mark)
+
+        # limpiar detalle al repintar
+        for item in self.tree_detalle.get_children():
+            self.tree_detalle.delete(item)
+        self._current_pedido = None
+        self._current_descuento = "0"
+
+    # ----------- Encabezado: click para filtros / Shift+click para ordenar -----------
+    def _on_tree_click_heading(self, event):
+        region = self.tree_pedidos.identify_region(event.x, event.y)
+        if region != "heading":
+            return  # deja pasar el click normal (selecciones, etc.)
+
+        colid = self.tree_pedidos.identify_column(event.x)  # e.g. '#1'
+        try:
+            idx = int(colid.replace("#","")) - 1
+        except Exception:
+            return
+
+        if not (0 <= idx < len(self._cols_p)):
+            return
+        key = self._cols_p[idx]
+
+        # Shift presionado -> toggle sort
+        if (event.state & 0x0001):  # Shift
+            self._toggle_sort(key)
+            return
+
+        # Clic normal -> popup filtro
+        self._open_filter_popup_for_column(key, event)
+
+        # Cancelamos el comportamiento por defecto de redimensionar/ordenar headings
+        return "break"
+
+    def _toggle_sort(self, key):
+        self._last_sort_col = key
+        self._sort_state[key] = not self._sort_state.get(key, False)
+        self._pintar_tree_aplicando_filtros_y_orden()
+
+    def _open_filter_popup_for_column(self, key, event):
+        # Cierra popup anterior si sigue abierto
+        try:
+            if hasattr(self, "_filter_popup") and self._filter_popup and self._filter_popup.winfo_exists():
+                self._filter_popup.destroy()
+        except Exception:
+            pass
+
+        # --- datos base ---
+        MAX_W, MAX_H, MARGIN = 300, 420, 10
+        base_x = self.tree_pedidos.winfo_rootx() + event.x
+        base_y = self.tree_pedidos.winfo_rooty() + event.y + 20
+
+        # --- popup ---
+        top = tk.Toplevel(self.tree_pedidos)
+        top.wm_overrideredirect(True)         # look tipo popup
+        top.attributes("-topmost", True)
+        self._filter_popup = top
+
+        # flags anti-race
+        _alive = {"ok": True}
+        _after_id = {"id": None}
+        _qtrace = {"id": None}
+
+        def _exists(w):
+            try:
+                return bool(w and w.winfo_exists())
+            except Exception:
+                return False
+
+        # contenedor principal
+        frm = ttk.Frame(top, padding=8, style=self.frame_style)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text=f"Filtrar por: {key}", style=self.label_style).pack(anchor="w")
+
+        qvar = tk.StringVar()
+        ent = ttk.Entry(frm, textvariable=qvar)
+        ent.pack(fill="x", pady=(4,6))
+        ent.focus_set()
+
+        # valores únicos (fechas por día)
+        if key in ("fecha", "fecha_entrega"):
+            vals = sorted({ _date_key(r.get(key)) for r in self._raw_pedidos })
+        else:
+            vals = sorted({ (r.get(key) or "") for r in self._raw_pedidos })
+
+        preset = set(self._active_filters.get(key, set())) or set(vals)
+
+        # "Seleccionar todo" + lista con scroll
+        listfrm = ttk.Frame(frm, style=self.frame_style); listfrm.pack(fill="both", expand=True, pady=(2,6))
+        var_all = tk.BooleanVar(value=(preset == set(vals)))
+        ttk.Checkbutton(listfrm, text="(Seleccionar todo)", variable=var_all, style=self.label_style)\
+            .pack(anchor="w")
+
+        canvas = tk.Canvas(listfrm, highlightthickness=0, bg="#1e1e1e")
+        sby = ttk.Scrollbar(listfrm, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, style=self.frame_style)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sby.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sby.pack(side="right", fill="y")
+
+        item_vars = []
+
+        def _apply_and_close(selected_values:set):
+            self._active_filters[key] = selected_values
+            self._pintar_tree_aplicando_filtros_y_orden()
+            _safe_close()
+
+        def _apply_single(value):
+            _apply_and_close({value})
+
+        def _rebuild_items(filter_text=""):
+            if not (_alive["ok"] and _exists(inner)):
+                return
+
+            # limpia lista
+            for w in list(inner.winfo_children()):
+                try: w.destroy()
+                except: pass
+            item_vars.clear()
+
+            subset = [v for v in vals if filter_text.lower() in str(v).lower()]
+            for v in subset:
+                var = tk.BooleanVar(value=(v in preset))
+                txt = v if v != "" else "N/A"
+                cb = ttk.Checkbutton(inner, text=txt, variable=var, style=self.label_style)
+                cb.pack(anchor="w")
+                # doble clic o Enter → aplica solo ese
+                cb.bind("<Double-Button-1>", lambda e, vv=v: _apply_single(vv))
+                cb.bind("<Return>",          lambda e, vv=v: _apply_single(vv))
+                item_vars.append((v, var))
+
+            current = {v for v, vv in item_vars if vv.get()}
+            var_all.set(len(subset) > 0 and len(current) == len(subset))
+
+            _debounced_fit()
+
+        def _set_all_checks(state: bool):
+            for _, var in item_vars:
+                var.set(state)
+
+        # búsqueda incremental
+        def on_q_changed(*_):
+            if not (_alive["ok"] and _exists(top) and _exists(inner)):
+                return
+            _rebuild_items(qvar.get())
+        _qtrace["id"] = qvar.trace_add("write", on_q_changed)
+
+        # botones
+        btns = ttk.Frame(frm, style=self.frame_style); btns.pack(fill="x")
+        ttk.Button(btns, text="Aplicar", style=self.button_style,
+                command=lambda: _apply_and_close({v for v, var in item_vars if var.get()}))\
+            .pack(side="right")
+        ttk.Button(btns, text="Limpiar", style=self.button_style,
+                command=lambda: (_apply_and_close(set())))\
+            .pack(side="right", padx=(6,0))
+        ttk.Button(btns, text="Cerrar",  style=self.button_style,
+                command=lambda: _safe_close())\
+            .pack(side="left")
+
+        # Enter en textbox → aplicar ese valor
+        def _apply_from_entry(_e=None):
+            val = (qvar.get() or "").strip()
+            if not val:
+                return
+            if key in ("fecha", "fecha_entrega"):
+                val = _date_key(val)
+            _apply_and_close({val})
+        ent.bind("<Return>", _apply_from_entry)
+
+        # seleccionar todo toggle
+        def _on_toggle_all():
+            _set_all_checks(var_all.get())
+        var_all.trace_add("write", lambda *_: _on_toggle_all())
+
+        # ajuste de tamaño y posición (sin cerrar por clic-fuera)
+        def _fit_height_and_place():
+            if not (_alive["ok"] and _exists(top) and _exists(frm)):
+                return
+            try:
+                top.update_idletasks()
+                req_h = frm.winfo_reqheight()
+            except Exception:
+                return
+
+            pop_h = min(req_h, MAX_H)
+            if req_h > MAX_H and _exists(canvas):
+                try:
+                    cur_h = canvas.winfo_height() or 220
+                    overflow = max(0, req_h - MAX_H)
+                    canvas.config(height=max(120, cur_h - overflow))
+                    top.update_idletasks()
+                    req2 = frm.winfo_reqheight()
+                    pop_h = min(req2, MAX_H)
+                except Exception:
+                    pass
+
+            screen_w = top.winfo_screenwidth()
+            screen_h = top.winfo_screenheight()
+            px = max(MARGIN, min(base_x, screen_w - MAX_W - MARGIN))
+            py = max(MARGIN, min(base_y, screen_h - pop_h - MARGIN))
+            try:
+                top.geometry(f"{MAX_W}x{pop_h}+{px}+{py}")
+            except Exception:
+                pass
+
+        def _debounced_fit():
+            if not _exists(top):
+                return
+            try:
+                if _after_id["id"] is not None:
+                    top.after_cancel(_after_id["id"])
+            except Exception:
+                pass
+            _after_id["id"] = top.after(0, _fit_height_and_place)
+
+        # cierre seguro único (sin unbinds globales)
+        _state = {"closed": False}
+        def _safe_close():
+            if _state["closed"]:
+                return
+            _state["closed"] = True
+            _alive["ok"] = False
+            # cancela after
+            try:
+                if _after_id["id"] is not None and _exists(top):
+                    top.after_cancel(_after_id["id"])
+            except Exception:
+                pass
+            _after_id["id"] = None
+            # quita trace
+            try:
+                if _qtrace["id"] is not None:
+                    qvar.trace_remove("write", _qtrace["id"])
+            except Exception:
+                pass
+            _qtrace["id"] = None
+            # destruye popup
+            try:
+                if _exists(top):
+                    top.destroy()
+            except Exception:
+                pass
+
+        # binds de cierre
+        top.bind("<Escape>", lambda e: _safe_close())
+        top.bind("<Destroy>", lambda e: _safe_close())
+
+        # pinta items iniciales y acomoda popup
+        _rebuild_items("")
+        _fit_height_and_place()
+
+
+
+
+
+
+    # ---------------- Lógica original (detalle, ctx, editores, PDF) ----------------
     def _on_select_pedido(self, event=None):
         for item in self.tree_detalle.get_children():
             self.tree_detalle.delete(item)
@@ -478,8 +815,6 @@ class TabPedidos:
             use_sync=es_fantasma,
         )
 
-
-
     def _abrir_editor_pedido(self):
         iid = self.tree_pedidos.selection()
         if not iid:
@@ -532,12 +867,24 @@ class TabPedidos:
 
         items = []
         for r in items_raw:
-            items.append({
-                "cantidad": int(r.get("cantidad") or 0),
-                "producto": r.get("producto",""),
-                "precio_unitario": r.get("precio_unitario","0"),
-                "importe": r.get("importe","0"),
-            })
+            c = int(r.get("cantidad") or 0)
+            comp = int(r.get("cantidad_completada") or 0)
+            if c > 0 and comp >= c:  # SOLO las completadas
+                try:
+                    punit = float(str(r.get("precio_unitario","0")).replace(",", "."))
+                except:
+                    punit = 0.0
+                importe = punit * c
+                items.append({
+                    "cantidad": c,
+                    "producto": r.get("producto",""),
+                    "precio_unitario": f"{punit:.2f}",
+                    "importe": f"{importe:.2f}",
+                })
+
+        if not items:
+            messagebox.showwarning("Atención", "No hay productos completados para generar la nota.")
+            return
 
         try:
             pdf_path = generar_pdf_pedido(

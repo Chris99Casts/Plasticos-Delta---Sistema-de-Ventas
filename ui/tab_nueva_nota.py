@@ -438,20 +438,20 @@ class TabNuevaNota:
             messagebox.showerror("Error", f"No se pudo registrar el pedido.\n{e}")
             return
 
-        # Aviso y opción de generar PDF
-        if messagebox.askyesno("Registrado", f"Pedido {id_pedido} registrado.\n\n¿Deseas generar la nota (PDF) ahora?"):
-            try:
-                pdf_path = generar_pdf_pedido(
-                    id_pedido=id_pedido,
-                    cliente=cliente,
-                    fecha_str=fecha_str,
-                    items=items,
-                    # Deja que pdf_utils resuelva el logo desde assets si ya lo tienes configurado
-                    qr_kind="QR",
-                )
-                abrir_pdf(pdf_path)
-            except Exception as e:
-                messagebox.showwarning("PDF", f"El pedido se registró, pero no se pudo generar el PDF.\n{e}")
+        # --------------------- Aviso y opción de generar PDF---------------------------- #
+        # if messagebox.askyesno("Registrado", f"Pedido {id_pedido} registrado.\n\n¿Deseas generar la nota (PDF) ahora?"):
+        #     try:
+        #         pdf_path = generar_pdf_pedido(
+        #             id_pedido=id_pedido,
+        #             cliente=cliente,
+        #             fecha_str=fecha_str,
+        #             items=items,
+        #             # Deja que pdf_utils resuelva el logo desde assets si ya lo tienes configurado
+        #             qr_kind="QR",
+        #         )
+        #         abrir_pdf(pdf_path)
+        #     except Exception as e:
+        #         messagebox.showwarning("PDF", f"El pedido se registró, pero no se pudo generar el PDF.\n{e}")
 
         # --- SIEMPRE: dejar lista la pestaña para otra captura ---
         self._flush_form()

@@ -21,6 +21,25 @@ ADMIN_CFG = os.path.join(os.getcwd(), "admin_cfg.json")
 ADMIN_USER = "JPerez"
 DEFAULT_ADMIN_PASS = "18062002"
 
+def _try_parse_dt(s: str):
+    s = (s or "").strip()
+    if not s: return None
+    formatos = [
+        "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M", "%Y/%m/%d %H:%M", "%Y.%m.%d %H:%M",
+        "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%Y.%m.%d"
+    ]
+    for f in formatos:
+        try: return datetime.strptime(s, f)
+        except: pass
+    return None
+
+def _fmt_dt_show(s: str) -> str:
+    dt = _try_parse_dt(s)
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else (s or "")
+
+def _date_key(s: str) -> str:
+    dt = _try_parse_dt(s)
+    return dt.strftime("%Y-%m-%d") if dt else (s or "")
 
 # Intentar importar tkcalendar (mini calendario)
 _HAS_TKCAL = False
@@ -43,6 +62,10 @@ class TabCobranza:
         self.button_style = button_style
         self.label_style = label_style
         self.on_refresh_all = on_refresh_all
+
+        # --- Estado filtros tipo Excel ---
+        self._active_filters = {}      # {col_id: set(valores)}
+        self._raw_rows = []            # filas ya "enriquecidas" para mostrar/filtrar
 
         self.frame = ttk.Frame(notebook, style=self.frame_style)
         self._dlg_abono = None   # ventana de abonos (evitar múltiples)
@@ -90,8 +113,6 @@ class TabCobranza:
         if callable(self.on_refresh_all):
             self.on_refresh_all()
 
-    
-
     # ------------------- UI principal ------------------------
     def _build_ui(self):
         top = ttk.Frame(self.frame, style=self.frame_style)
@@ -107,8 +128,14 @@ class TabCobranza:
         ent.pack(side="left")
         ent.bind("<Return>", lambda e: self.refrescar())
 
-        ttk.Button(box, text="Buscar", command=self.refrescar, style=self.button_style).pack(side="left", padx=(8,0))
-        ttk.Button(box, text="Limpiar", command=self._limpiar, style=self.button_style).pack(side="left", padx=(6,0))
+        ttk.Button(box, text="Buscar", command=self.refrescar, style=self.button_style)\
+        .pack(side="left", padx=(8,0))
+        ttk.Button(box, text="Limpiar", command=self._limpiar, style=self.button_style)\
+        .pack(side="left", padx=(6,0))
+        ttk.Button(box, text="Quitar filtros", command=self._reset_header_filters, style=self.button_style)\
+        .pack(side="left", padx=(6,0))
+
+        
 
         cols = (
             "id_pedido","fecha","fecha_entrega","no_factura","cliente","total",
@@ -135,12 +162,16 @@ class TabCobranza:
             "desc_fijo_pct":"Desc. fijo (%)",
             "total_fijo":"Total fijo",
         }
+        self._cols = cols  # ← mantener orden para pintado/filtrado
+        self.DATE_COLS = {"fecha", "fecha_entrega"}  # ← filtran por día
+
         self.tree = ttk.Treeview(self.frame, columns=cols, show="headings", height=18, style=self.tree_style)
 
         for c in cols:
-            self.tree.heading(c, text=headers[c])
+            # Encabezado "clicable" para abrir popup de filtro por columna
+            self.tree.heading(c, text=headers[c], command=lambda col=c: self._open_filter_popup_for_column(col))
             width_map = {
-                "id_pedido":110, "fecha":120, "fecha_entrega":140, "no_factura":130,"cliente":220, "total":100,
+                "id_pedido":110, "fecha":150, "fecha_entrega":160, "no_factura":130,"cliente":220, "total":100,
                 "preferencial":95, "estado_surtido":110, "pagado":70, "elegible10":95,
                 "dias_entrega":120, "total_cobro_actual":160, "abonado":110, "saldo":110,
                 "desc_fijo_pct":105, "total_fijo":110
@@ -149,15 +180,14 @@ class TabCobranza:
 
         # Menú contextual
         self._ctx = tk.Menu(self.frame, tearoff=0)
-        # índices: 0:fecha, 1:sep, 2:abono, 3:historial, 4:sep, 5:aplicar desc, 6:quitar desc
+        # índices: 0:abono, 1:historial, 2:sep, 3:aplicar desc, 4:quitar desc, 5:registrar factura, 6:sep
         self._ctx.add_command(label="Registrar abono…", command=self._menu_registrar_abono)
         self._ctx.add_command(label="Ver historial de abonos…", command=self._menu_historial_abonos)
         self._ctx.add_separator()
         self._ctx.add_command(label="Aplicar descuento forzado 10%…", command=self._aplicar_desc_forzado)
         self._ctx.add_command(label="Quitar descuento forzado…", command=self._quitar_desc_forzado)
-        self._ctx.add_command(label="Registrar factura…", command=self._menu_registrar_factura)  # <-- nuevo
+        self._ctx.add_command(label="Registrar factura…", command=self._menu_registrar_factura)
         self._ctx.add_separator()
-
 
         self.tree.bind("<Button-3>", self._show_ctx)
         self.tree.bind("<Control-Button-1>", self._show_ctx)
@@ -199,23 +229,23 @@ class TabCobranza:
             sel = self.tree.selection()
             if sel:
                 vals = self.tree.item(sel[0])["values"]
-                # columnas: 0:id,1:fecha,2:fecha_entrega,3:cliente,4:total,5:preferencial,6:estado,7:pagado,...
-                pagado_txt = str(vals[7]).strip().lower() if len(vals) > 7 else "no"
+                # columnas: 0:id,1:fecha,2:fecha_entrega,3:no_factura,4:cliente,5:total,6:preferencial,7:estado,8:pagado,...
+                pagado_txt = str(vals[8]).strip().lower() if len(vals) > 8 else "no"
                 pagado_si = (pagado_txt in ("sí", "si", "yes", "1"))
 
-                pref_txt = str(vals[5]).strip().lower() if len(vals) > 5 else "no"
+                pref_txt = str(vals[6]).strip().lower() if len(vals) > 6 else "no"
                 pref_si = (pref_txt in ("sí", "si", "yes", "1"))
         except Exception:
             pagado_si = False
             pref_si = False
 
-        # Índices en el menú contextual:
-        # 0: fecha, 1: sep, 2: registrar abono, 3: historial, 4: sep, 5: aplicar desc, 6: quitar desc
         try:
             # Deshabilitar opciones de descuento si está pagado O si es preferencial
             disable_discounts = (pagado_si or pref_si)
-            self._ctx.entryconfigure(5, state=("disabled" if disable_discounts else "normal"))
-            self._ctx.entryconfigure(6, state=("disabled" if disable_discounts else "normal"))
+            # Índices del menú contextual según _ctx.add_command arriba:
+            self._ctx.entryconfigure(2, state="disabled")  # es el separador, se ignora
+            self._ctx.entryconfigure(3, state=("disabled" if disable_discounts else "normal"))
+            self._ctx.entryconfigure(4, state=("disabled" if disable_discounts else "normal"))
         except Exception:
             pass
 
@@ -223,7 +253,6 @@ class TabCobranza:
             self._ctx.tk_popup(event.x_root, event.y_root)
         finally:
             self._ctx.grab_release()
-
 
     def _limpiar(self):
         self.var_buscar.set("")
@@ -238,7 +267,8 @@ class TabCobranza:
             return None
         return str(vals[0])
 
-    def _filtrados(self):
+    def _filtrados_basicos(self):
+        """Filtro rápido por pedido # y excluir cancelados (previo a filtros por encabezado)."""
         try:
             rows = leer_pedidos()
         except Exception as e:
@@ -250,19 +280,25 @@ class TabCobranza:
             rows = [r for r in rows if q in (r.get("id_pedido",""))]
         return rows
 
+    # =========================
+    #  Refrescar (ahora “enriquece” filas y guarda en _raw_rows)
+    # =========================
     def refrescar(self, *args, **kwargs):
         # Si aún no está desbloqueado o no existe el Treeview, no hacer nada
         if not getattr(self, "_unlocked", False) or getattr(self, "tree", None) is None:
             return
        
+        # Limpia pintado actual
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         self._current = None
 
-        for r in self._filtrados():
+        # Construye filas enriquecidas (display) y guarda en _raw_rows
+        enriched = []
+        for r in self._filtrados_basicos():
             pid = r.get("id_pedido","")
-            fecha = r.get("fecha","")
-            fecha_entrega = r.get("fecha_entrega","")
+            fecha = _fmt_dt_show(r.get("fecha",""))
+            fecha_entrega = _fmt_dt_show(r.get("fecha_entrega",""))
             cliente = r.get("cliente","")
             total_txt = r.get("total","0")
             try:
@@ -293,27 +329,289 @@ class TabCobranza:
             desc_fijo_pct = r.get("descuento_pago_pct","").strip()
             total_fijo = r.get("total_cobro","").strip()
 
-            # Etiqueta por estado de pago
+            no_factura = (r.get("no_factura","") or "").strip() or "N/A"
+
+            enriched.append({
+                "id_pedido": pid,
+                "fecha": fecha,
+                "fecha_entrega": fecha_entrega,
+                "no_factura": no_factura,
+                "cliente": cliente,
+                "total": f"{total_pedido:.2f}",
+                "preferencial": preferencial,
+                "estado_surtido": estado_surtido,
+                "pagado": pagado,
+                "elegible10": elegible,
+                "dias_entrega": (dias_entrega if isinstance(dias_entrega, int) else "N/A"),
+                "total_cobro_actual": f"{objetivo_actual:.2f}",
+                "abonado": f"{abonado:.2f}",
+                "saldo": f"{saldo:.2f}",
+                "desc_fijo_pct": desc_fijo_pct,
+                "total_fijo": total_fijo
+            })
+
+        self._raw_rows = enriched
+        self._pintar_tree_aplicando_filtros_y_orden()
+
+    # =========================
+    #  Aplicación de filtros + pintado
+    # =========================
+    def _aplicar_filtros_header(self, rows):
+        if not self._active_filters:
+            return rows
+        out = []
+        for r in rows:
+            ok = True
+            for col_key, allowed in self._active_filters.items():
+                if not allowed:
+                    ok = False; break
+                val = r.get(col_key, "")
+                # Para columnas de fecha, la comparación es por día
+                if col_key in self.DATE_COLS:
+                    val = _date_key(val)
+                if val not in allowed:
+                    ok = False; break
+            if ok:
+                out.append(r)
+        return out
+
+    def _pintar_tree_aplicando_filtros_y_orden(self):
+        # limpia
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+
+        datos = self._aplicar_filtros_header(self._raw_rows or [])
+
+        # Inserta con tags por estado de pago (como antes)
+        for r in datos:
+            # estado de pago por 'saldo' y 'abonado'
+            try:
+                saldo_val = float(str(r.get("saldo","0")).replace(",",".")) if r.get("saldo") else 0.0
+                objetivo_val = float(str(r.get("total_cobro_actual","0")).replace(",",".")) if r.get("total_cobro_actual") else 0.0
+                abonado_val = float(str(r.get("abonado","0")).replace(",",".")) if r.get("abonado") else 0.0
+            except Exception:
+                saldo_val, objetivo_val, abonado_val = 0.0, 0.0, 0.0
+
             tag = "pend"
-            if abs(saldo) < 0.01 and objetivo_actual > 0:
+            if abs(saldo_val) < 0.01 and objetivo_val > 0:
                 tag = "comp"
-            elif abonado > 0:
+            elif abonado_val > 0:
                 tag = "parc"
 
-            no_factura = (r.get("no_factura","") or "").strip() or "N/A"
             self.tree.insert(
                 "", "end",
-                values=(
-                    pid, fecha, fecha_entrega, no_factura, cliente, f"{total_pedido:.2f}",
-                    preferencial, estado_surtido, pagado,
-                    elegible, (dias_entrega if isinstance(dias_entrega, int) else "N/A"),
-                    f"{objetivo_actual:.2f}", f"{abonado:.2f}", f"{saldo:.2f}",
-                    desc_fijo_pct, total_fijo
-                ),
+                values=tuple(r.get(c,"") for c in self._cols),
                 tags=(tag,)
             )
 
-    
+    # =========================
+    #  Popup de filtros (estable)
+    # =========================
+    def _open_filter_popup_for_column(self, key, event=None):
+        # cierra si hay otro abierto
+        try:
+            if hasattr(self, "_filter_popup") and self._filter_popup and self._filter_popup.winfo_exists():
+                self._filter_popup.destroy()
+        except Exception:
+            pass
+
+        MAX_W, MAX_H, MARGIN = 300, 420, 10
+        # coloca bajo el header; si no hay event, usa el centro del widget
+        if event:
+            base_x = self.tree.winfo_rootx() + event.x
+            base_y = self.tree.winfo_rooty() + event.y + 20
+        else:
+            base_x = self.tree.winfo_rootx() + self.tree.winfo_width()//2
+            base_y = self.tree.winfo_rooty() + 40
+
+        top = tk.Toplevel(self.tree)
+        top.wm_overrideredirect(True)     # estilo popup
+        top.attributes("-topmost", True)
+        self._filter_popup = top
+
+        _alive = {"ok": True}
+        _after_id = {"id": None}
+        _qtrace = {"id": None}
+
+        def _exists(w):
+            try: return bool(w and w.winfo_exists())
+            except: return False
+
+        frm = ttk.Frame(top, padding=8, style=self.frame_style); frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Filtrar por: {key}", style=self.label_style).pack(anchor="w")
+
+        qvar = tk.StringVar()
+        ent = ttk.Entry(frm, textvariable=qvar); ent.pack(fill="x", pady=(4,6)); ent.focus_set()
+
+        # Valores únicos (fechas → por día)
+        if key in self.DATE_COLS:
+            vals = sorted({ _date_key(r.get(key,"")) for r in (self._raw_rows or []) })
+        else:
+            vals = sorted({ (str(r.get(key,"")) or "") for r in (self._raw_rows or []) })
+
+        all_values_set = set(vals)
+        preset = set(self._active_filters.get(key, set())) or set(vals)
+
+        listfrm = ttk.Frame(frm, style=self.frame_style); listfrm.pack(fill="both", expand=True, pady=(2,6))
+        var_all = tk.BooleanVar(value=(preset == set(vals)))
+        sel_all_cb = ttk.Checkbutton(listfrm, text="(Seleccionar todo)", variable=var_all, style=self.label_style)
+        sel_all_cb.pack(anchor="w")
+
+        canvas = tk.Canvas(listfrm, highlightthickness=0, bg="#1e1e1e")
+        sby = ttk.Scrollbar(listfrm, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, style=self.frame_style)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sby.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sby.pack(side="right", fill="y")
+
+        item_vars = []
+
+        def _safe_close():
+            if not _alive["ok"]: return
+            _alive["ok"] = False
+            try:
+                if _after_id["id"] is not None and _exists(top):
+                    top.after_cancel(_after_id["id"])
+            except Exception:
+                pass
+            _after_id["id"] = None
+            try:
+                if _qtrace["id"] is not None:
+                    qvar.trace_remove("write", _qtrace["id"])
+            except Exception:
+                pass
+            _qtrace["id"] = None
+            try:
+                if _exists(top): top.destroy()
+            except Exception:
+                pass
+
+        def _pintar_estado_sel_all():
+            # actualiza el estado de var_all con base en lo visible
+            subset_vars = [var for (_v, var) in item_vars]
+            if not subset_vars:
+                var_all.set(True)
+                return
+            checked = sum(1 for var in subset_vars if var.get())
+            var_all.set(checked == len(subset_vars))
+
+        def _apply_and_close(selected:set, all_values:set):
+            """
+            - Si selected está vacío o contiene todos los valores → elimina el filtro (columna libre).
+            - En otro caso → aplica el conjunto seleccionado.
+            """
+            if not selected or selected == all_values:
+                self._active_filters.pop(key, None)
+            else:
+                self._active_filters[key] = selected
+            self._pintar_tree_aplicando_filtros_y_orden()
+            _safe_close()
+
+        def _apply_single(value):
+            _apply_and_close({value}, all_values_set)
+
+        def _rebuild_items(filter_text=""):
+            if not (_alive["ok"] and _exists(inner)): return
+
+            for w in list(inner.winfo_children()):
+                try: w.destroy()
+                except: pass
+            item_vars.clear()
+
+            subset = [v for v in vals if filter_text.lower() in str(v).lower()]
+            for v in subset:
+                var = tk.BooleanVar(value=(v in preset))
+                txt = v if v != "" else "N/A"
+                cb = ttk.Checkbutton(inner, text=txt, variable=var, style=self.label_style)
+                cb.pack(anchor="w")
+                # doble clic / Enter → aplica sólo ese valor
+                cb.bind("<Double-Button-1>", lambda e, vv=v: _apply_single(vv))
+                cb.bind("<Return>",          lambda e, vv=v: _apply_single(vv))
+                item_vars.append((v, var))
+
+            _pintar_estado_sel_all()
+            _debounced_fit()
+
+        def _set_all_checks(state: bool):
+            for _, var in item_vars:
+                var.set(state)
+
+        def on_q_changed(*_):
+            if not (_alive["ok"] and _exists(top) and _exists(inner)): return
+            _rebuild_items(qvar.get())
+        _qtrace["id"] = qvar.trace_add("write", on_q_changed)
+
+        # Toggle seleccionar todo afecta sólo lo visible
+        def _on_toggle_all(*_):
+            _set_all_checks(bool(var_all.get()))
+        var_all.trace_add("write", lambda *_: _on_toggle_all())
+
+        btns = ttk.Frame(frm, style=self.frame_style); btns.pack(fill="x")
+        ttk.Button(btns, text="Aplicar", style=self.button_style,
+                command=lambda: _apply_and_close({v for v, var in item_vars if var.get()}, all_values_set))\
+            .pack(side="right")
+        ttk.Button(btns, text="Limpiar", style=self.button_style,
+                command=lambda: _apply_and_close(set(), all_values_set))\
+            .pack(side="right", padx=(6,0))
+        ttk.Button(btns, text="Cerrar",  style=self.button_style,
+                command=lambda: _safe_close())\
+            .pack(side="left")
+
+        def _apply_from_entry(_e=None):
+            val = (qvar.get() or "").strip()
+            if not val:
+                # vacío → elimina filtro de esta columna
+                _apply_and_close(set(), all_values_set)
+                return
+            if key in self.DATE_COLS:
+                val = _date_key(val)
+            _apply_and_close({val}, all_values_set)
+        ent.bind("<Return>", _apply_from_entry)
+
+        def _fit_height_and_place():
+            if not (_alive["ok"] and _exists(top) and _exists(frm)): return
+            try:
+                top.update_idletasks()
+                req_h = frm.winfo_reqheight()
+            except Exception:
+                return
+            pop_h = min(req_h, MAX_H)
+            if req_h > MAX_H and _exists(canvas):
+                try:
+                    cur_h = canvas.winfo_height() or 220
+                    overflow = max(0, req_h - MAX_H)
+                    canvas.config(height=max(120, cur_h - overflow))
+                    top.update_idletasks()
+                    req2 = frm.winfo_reqheight()
+                    pop_h = min(req2, MAX_H)
+                except Exception:
+                    pass
+
+            screen_w = top.winfo_screenwidth(); screen_h = top.winfo_screenheight()
+            px = max(MARGIN, min(base_x, screen_w - MAX_W - MARGIN))
+            py = max(MARGIN, min(base_y, screen_h - pop_h - MARGIN))
+            try:
+                top.geometry(f"{MAX_W}x{pop_h}+{px}+{py}")
+            except Exception:
+                pass
+
+        def _debounced_fit():
+            if not _exists(top): return
+            try:
+                if _after_id["id"] is not None:
+                    top.after_cancel(_after_id["id"])
+            except Exception:
+                pass
+            _after_id["id"] = top.after(0, _fit_height_and_place)
+
+        top.bind("<Escape>",  lambda e: _safe_close())
+        top.bind("<Destroy>", lambda e: _safe_close())
+
+        _rebuild_items("")
+        _fit_height_and_place()
+
 
     # --- Registrar abono (modal blindado)
     def _menu_registrar_abono(self):
@@ -592,3 +890,9 @@ class TabCobranza:
         self._init_row_tags()
         self.refrescar()
 
+    def _reset_header_filters(self):
+        """Quita todos los filtros tipo Excel (encabezado) y repinta."""
+        self._active_filters.clear()
+        # Si también quieres limpiar el campo 'Pedido #', descomenta la siguiente línea:
+        # self.var_buscar.set("")
+        self._pintar_tree_aplicando_filtros_y_orden()
