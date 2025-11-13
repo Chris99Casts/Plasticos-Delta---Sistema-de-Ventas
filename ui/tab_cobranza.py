@@ -15,6 +15,7 @@ from data.csv_manager import (
     leer_abonos,
     _es_pedido_fantasma,
     set_no_factura,
+    pronto_pago_pct_para_pedido,
 )
 
 # Misma ruta/usuario/semilla que TabNuevaNota
@@ -155,7 +156,7 @@ class TabCobranza:
             "preferencial":"Preferencial",
             "estado_surtido":"Estado surtido",
             "pagado":"Pagado",
-            "elegible10":"Elegible 10%",
+            "elegible10":"Elegible PP",
             "dias_entrega":"Días desde entrega",
             "total_cobro_actual":"Total a cobrar (actual)",
             "abonado":"Abonado",
@@ -185,7 +186,7 @@ class TabCobranza:
         self._ctx.add_command(label="Registrar abono…", command=self._menu_registrar_abono)
         self._ctx.add_command(label="Ver historial de abonos…", command=self._menu_historial_abonos)
         self._ctx.add_separator()
-        self._ctx.add_command(label="Aplicar descuento forzado 10%…", command=self._aplicar_desc_forzado)
+        self._ctx.add_command(label="Aplicar descuento forzado…", command=self._aplicar_desc_forzado)
         self._ctx.add_command(label="Quitar descuento forzado…", command=self._quitar_desc_forzado)
         self._ctx.add_command(label="Registrar factura…", command=self._menu_registrar_factura)
         self._ctx.add_separator()
@@ -782,18 +783,30 @@ class TabCobranza:
         if not pid:
             messagebox.showwarning("Atención", "Selecciona un pedido.")
             return
-        if not messagebox.askyesno("Confirmar", f"Aplicar DESCUENTO FORZADO del 10% a {pid}?"):
+
+        # Obtener el % de pronto pago configurado para ese pedido/cliente
+        try:
+            pct = pronto_pago_pct_para_pedido(pid)
+        except Exception:
+            pct = 10.0
+
+        if not messagebox.askyesno(
+            "Confirmar",
+            f"Aplicar DESCUENTO FORZADO del {pct:.2f}% a {pid}?"
+        ):
             return
         try:
-            ok = aplicar_descuento_forzado(pid, 10.0)
+            ok = aplicar_descuento_forzado(pid, pct)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo aplicar el descuento forzado.\n{e}")
             return
         if ok:
             messagebox.showinfo("Listo", f"Descuento forzado aplicado a {pid}.")
-            self.refrescar(); self._emit_refresh_all()
+            self.refrescar()
+            self._emit_refresh_all()
         else:
             messagebox.showinfo("Info", "No se realizaron cambios.")
+
 
     def _quitar_desc_forzado(self):
         pid = self._get_selected_id()

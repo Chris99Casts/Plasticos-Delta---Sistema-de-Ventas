@@ -389,23 +389,37 @@ def cancelar_pedido(id_pedido: str) -> bool:
 
 # -------- Clientes --------
 def cargar_clientes():
-    encs=["utf-8-sig","utf-8","cp1252","latin-1"]; last=None
+    encs = ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
+    last = None
     for enc in encs:
         try:
-            with open(CLIENTES_PATH,"r",newline="",encoding=enc,errors="strict") as f:
-                sample=f.read(4096); f.seek(0)
-                try: dialect=csv.Sniffer().sniff(sample, delimiters=",;|\t")
-                except: dialect=csv.excel; dialect.delimiter=","
-                rows=list(csv.DictReader(f, dialect=dialect))
+            with open(CLIENTES_PATH, "r", newline="", encoding=enc, errors="strict") as f:
+                sample = f.read(4096)
+                f.seek(0)
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;|\t")
+                except Exception:
+                    dialect = csv.excel
+                    dialect.delimiter = ","
+                rows = list(csv.DictReader(f, dialect=dialect))
         except Exception as e:
-            last=e; continue
-        out=[]
+            last = e
+            continue
+
+        out = []
         for r in rows:
-            rr={(k or "").strip().lower():(v or "").strip() for k,v in r.items()}
-            out.append({"id_cliente":rr.get("id_cliente",""),"nombre":rr.get("nombre",""),
-                        "descuento":"1" if (rr.get("descuento","").lower() in ("1","true","sí","si","y","yes")) else "0"})
+            rr = {(k or "").strip().lower(): (v or "").strip() for k, v in r.items()}
+            out.append({
+                "id_cliente": rr.get("id_cliente", ""),
+                "nombre": rr.get("nombre", ""),
+                "descuento": "1" if (rr.get("descuento", "").lower() in ("1", "true", "sí", "si", "y", "yes")) else "0",
+                "dscto_pp": rr.get("dscto_pp", ""),  # ← NUEVA COLUMNA
+            })
         return out
     raise UnicodeDecodeError(f"No se pudo leer {CLIENTES_PATH}. Último error: {last}")
+
+
+
 
 def buscar_clientes(texto: str):
     q=(texto or "").strip().lower()
@@ -422,6 +436,65 @@ def cliente_tiene_descuento_preferencial(id_cliente: str | None, nombre: str | N
         pref=(r.get("descuento") or "0") in ("1","true","si","sí")
         if (id_cliente and rid==id_cliente) or (nombre and nom==nombre): return bool(pref)
     return False
+def pronto_pago_pct_cliente(id_cliente: str | None = None, nombre: str | None = None) -> float:
+    """
+    Regresa el % de pronto pago configurado para el cliente (columna dscto_pp).
+    Si no hay nada o es 0, regresa el valor por defecto _PRONTO_PAGO_PCT.
+    """
+    id_cliente = (id_cliente or "").strip().lower()
+    nombre = (nombre or "").strip().lower()
+
+    try:
+        default_pct = float(_PRONTO_PAGO_PCT)
+    except Exception:
+        default_pct = 10.0
+
+    for r in cargar_clientes():
+        rid = (r.get("id_cliente") or "").strip().lower()
+        nom = (r.get("nombre") or "").strip().lower()
+        if (id_cliente and rid == id_cliente) or (nombre and nom == nombre):
+            raw = (r.get("dscto_pp") or "").strip()
+            if not raw:
+                return default_pct
+            try:
+                val = float(_to_std_number(raw) or "0")
+            except Exception:
+                val = 0.0
+            if val <= 0:
+                return default_pct
+            return max(0.0, min(100.0, val))
+    return default_pct
+
+
+def pronto_pago_pct_para_pedido(id_pedido: str) -> float:
+    """
+    Obtiene el % de pronto pago aplicable a un pedido usando el cliente del pedido.
+    """
+    id_pedido = str(id_pedido)
+
+    try:
+        default_pct = float(_PRONTO_PAGO_PCT)
+    except Exception:
+        default_pct = 10.0
+
+    for p in leer_pedidos():
+        if p.get("id_pedido") != id_pedido:
+            continue
+
+        cliente_raw = (p.get("cliente") or "").strip()
+        cid = ""
+        nombre = ""
+
+        # Tus pedidos usan formato "ID - Nombre"
+        if " - " in cliente_raw:
+            cid, nombre = [s.strip() for s in cliente_raw.split(" - ", 1)]
+        else:
+            nombre = cliente_raw
+
+        return pronto_pago_pct_cliente(cid, nombre)
+
+    return default_pct
+
 
 # -------- Abonos + Descuento / Pronto-pago --------
 def leer_abonos(id_pedido: str):
@@ -567,8 +640,10 @@ def total_cobro_actual(id_pedido: str):
             return fijo, pct_fijo, dias_display
 
         el = descuento_eligibilidad(id_pedido)
-        pronto = _PRONTO_PAGO_PCT if el['eligible'] else 0.0
-        objetivo = total_pedido*(1.0 - pronto/100.0)
+        pronto = pronto_pago_pct_para_pedido(id_pedido) if el["eligible"] else 0.0
+        objetivo = total_pedido * (1.0 - pronto/100.0)
+
+
         return objetivo, pronto, dias_display
     return 0.0, 0.0, "N/A"
 
@@ -607,11 +682,12 @@ def registrar_abono(id_pedido: str, monto: float):
         ya_tenia_desc = bool((p.get("descuento_pago_pct") or "").strip())
         if not ya_tenia_desc:
             el = descuento_eligibilidad(id_pedido)
-            pronto = _PRONTO_PAGO_PCT if el['eligible'] else 0.0
-            objetivo_posible = total_pedido*(1.0-pronto/100.0)
+            pronto = pronto_pago_pct_para_pedido(id_pedido) if el["eligible"] else 0.0
+            objetivo_posible = total_pedido * (1.0 - pronto/100.0)
             if abonado_nuevo + 1e-6 >= objetivo_posible:
-                p["descuento_pago_pct"]=f"{pronto:.2f}"; p["total_cobro"]=f"{objetivo_posible:.2f}"
-                objetivo=objetivo_posible
+                p["descuento_pago_pct"] = f"{pronto:.2f}"
+                p["total_cobro"] = f"{objetivo_posible:.2f}"
+                objetivo = objetivo_posible
         p["pagado"]="1" if (abonado_nuevo + 0.01 >= objetivo) else "0"
         break
     _write_pedidos(pedidos)
