@@ -802,8 +802,34 @@ class TabControlEntregas:
 
 
         # Listas ordenadas de clientes y productos
+        # Clientes los seguimos ordenando alfabéticamente
         clientes = sorted(clientes_set, key=lambda s: s.lower())
-        productos = sorted(productos_set, key=lambda s: s.lower())
+
+        # Productos en el mismo orden que en productos.csv
+        if _HAS_PRODUCTS and cargar_productos is not None:
+            try:
+                catalogo = list(cargar_productos())  # respeta el orden del CSV
+                orden_csv = []
+                vistos = set()
+
+                for row in catalogo:
+                    nombre = (row.get("producto") or "").strip()
+                    if nombre and nombre in productos_set and nombre not in vistos:
+                        orden_csv.append(nombre)
+                        vistos.add(nombre)
+
+                # Por si hubiera productos que aparecen en pedidos pero no en el CSV
+                extras = [p for p in productos_set if p not in vistos]
+                extras.sort(key=lambda s: s.lower())
+
+                productos = orden_csv + extras
+            except Exception:
+                # Si algo falla, caemos al orden alfabético como antes
+                productos = sorted(productos_set, key=lambda s: s.lower())
+        else:
+            # Sin catálogo, usamos orden alfabético
+            productos = sorted(productos_set, key=lambda s: s.lower())
+
 
         # Transponer la matriz: de cliente→producto a producto→cliente
         matriz_prod = defaultdict(lambda: defaultdict(int))
