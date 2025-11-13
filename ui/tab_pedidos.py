@@ -891,6 +891,29 @@ class TabPedidos:
                 "precio_unitario": f"{punit:.2f}",
                 "importe": f"{importe:.2f}",
             })
+        
+        # Reordenar items según el orden de productos.csv
+        try:
+            catalogo = cargar_productos()
+        except Exception:
+            catalogo = []
+
+        orden_map = {}
+        for idx, row in enumerate(catalogo):
+            nombre = (row.get("producto") or "").strip().lower()
+            if nombre and nombre not in orden_map:
+                orden_map[nombre] = idx
+
+        def _sort_item(it):
+            nombre = (it.get("producto") or "").strip().lower()
+            idx = orden_map.get(nombre)
+            if idx is None:
+                # Los que no estén en el CSV se van al final por orden alfabético
+                return (1, nombre)
+            return (0, idx)
+
+        items.sort(key=_sort_item)
+
 
         if not items:
             messagebox.showwarning(

@@ -274,6 +274,29 @@ class TabNuevaNota:
             importe = self._parse_float(vals[3])
             productos.append((cantidad, producto, precio, importe))
             total += importe
+        
+        # Reordenar líneas según el orden de productos.csv
+        try:
+            orden_map = {}
+            for idx, row in enumerate(self.productos_data):
+                nombre = (row.get("producto") or "").strip().lower()
+                if nombre and nombre not in orden_map:
+                    orden_map[nombre] = idx
+
+            def _sort_key(tupla):
+                _, nombre, _, _ = tupla
+                n = (nombre or "").strip().lower()
+                idx = orden_map.get(n)
+                if idx is None:
+                    # Los que no estén en el CSV se van al final, ordenados por nombre
+                    return (1, n)
+                return (0, idx)
+
+            productos.sort(key=_sort_key)
+        except Exception:
+            # Si algo falla, se queda el orden original
+            pass
+
 
         if not cliente or not productos:
             messagebox.showerror("Error", "Debe ingresar un cliente y al menos un producto.")
