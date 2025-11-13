@@ -562,8 +562,8 @@ class TabControlEntregas:
             dt = _parse_fecha_multi(p.get("fecha_entrega",""))
             dt_date = dt.date() if dt else None
 
-            # SOLO “Completado (día seleccionado)” con pedidos REALES
-            if (not es_fantasma) and (dt_date == dia):
+            # Matriz: “Completado (día seleccionado)” para pedidos REALES y FANTASMA (excepto cancelados)
+            if (estado != "cancelado") and (dt_date == dia):
                 pid = p.get("id_pedido","")
                 items = _leer_items_por_pedido_any(pid)
                 for it in items:
@@ -578,6 +578,7 @@ class TabControlEntregas:
                         matriz[cliente][prod] += comp_ok
                         if prod:
                             productos_set.add(prod)
+
 
             # Detalle (se mantiene para diagnóstico)
             pid = p.get("id_pedido","")
