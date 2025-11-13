@@ -125,8 +125,10 @@ def cargar_productos():
         try:
             with open(PRODUCTOS_PATH,"r",newline="",encoding=enc,errors="strict") as f:
                 sample=f.read(4096); f.seek(0)
-                try: dialect=csv.Sniffer().sniff(sample, delimiters=",;|\t")
-                except: dialect=csv.excel; dialect.delimiter=","
+                try:
+                    dialect=csv.Sniffer().sniff(sample, delimiters=",;|\t")
+                except Exception:
+                    dialect=csv.excel; dialect.delimiter=","
                 rows=list(csv.DictReader(f, dialect=dialect))
         except Exception as e:
             last=e; continue
@@ -134,11 +136,18 @@ def cargar_productos():
         for r in rows:
             rr={(k or "").strip().lower():(v or "").strip() for k,v in r.items()}
             producto = rr.get("producto") or rr.get("nombre") or rr.get("descripcion") or ""
-            p = _to_std_number(rr.get("precio","")) if rr.get("precio") else ""
+            p  = _to_std_number(rr.get("precio","")) if rr.get("precio") else ""
             pd = _to_std_number(rr.get("precio_desc","")) if rr.get("precio_desc") else (p or "")
-            norm.append({"producto":producto,"precio":p,"precio_desc":pd})
+            color = rr.get("matrix_cc") or rr.get("matriz_cc") or ""
+            norm.append({
+                "producto":   producto,
+                "precio":     p,
+                "precio_desc":pd,
+                "matrix_cc":  color
+            })
         return norm
     raise UnicodeDecodeError(f"No se pudo leer {PRODUCTOS_PATH}. Último error: {last}")
+
 
 # ---------------- helpers de IO (lectura) ----------------
 def _leer_todas_lineas():

@@ -14,25 +14,29 @@ from datetime import datetime, date
 from collections import defaultdict
 import subprocess
 import sys
-
+import re
 
 # --------- Imports de datos con compatibilidad de rutas ---------
 _HAS_ITEMS_LOADER = False
 _HAS_READER = False
+_HAS_PRODUCTS = False
+cargar_productos = None  # type: ignore
 try:
-    from data.csv_manager import leer_pedidos, leer_items_por_pedido  # type: ignore
+    from data.csv_manager import leer_pedidos, leer_items_por_pedido, cargar_productos  # type: ignore
     _HAS_ITEMS_LOADER = True
     _HAS_READER = True
+    _HAS_PRODUCTS = True
 except Exception:
     try:
-        from csv_manager import leer_pedidos, leer_items_por_pedido  # type: ignore
+        from csv_manager import leer_pedidos, leer_items_por_pedido, cargar_productos  # type: ignore
         _HAS_ITEMS_LOADER = True
         _HAS_READER = True
+        _HAS_PRODUCTS = True
     except Exception:
         _HAS_ITEMS_LOADER = False
         _HAS_READER = False
+        _HAS_PRODUCTS = False
 
-# --------- Imports opcionales de ReportLab para PDF (no obligatorio) ---------
 _HAS_RL = False
 try:
     from reportlab.lib.pagesizes import landscape
@@ -42,7 +46,7 @@ try:
     _HAS_RL = True
 except Exception:
     _HAS_RL = False
-
+    
 # 8.5" x 13.0" en puntos (1in = 72pt)
 OFICIO = (72*8.5, 72*13.0)   # (612, 936)
 
@@ -76,6 +80,61 @@ _FECHA_FORMATOS = [
     "%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S",
     "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y",
 ]
+
+# --------- Colores desde productos (matrix_cc) ---------
+def _normalize_color(val: str) -> str:
+    if not val:
+        return ""
+    s = str(val).strip().replace(" ", "")
+
+    # Hex tipo #RRGGBB o RRGGBB
+    if re.fullmatch(r"#?[0-9a-fA-F]{6}", s):
+        return s if s.startswith("#") else "#" + s
+
+    # RGB tipo "r,g,b" o "r;g;b"
+    m = re.fullmatch(r"(\d{1,3})[,;](\d{1,3})[,;](\d{1,3})", s)
+    if m:
+        r, g, b = (max(0, min(255, int(x))) for x in m.groups())
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    # Fallback: quizá nombre de color Tk ("red", etc.)
+    return s
+
+
+def _load_matrix_colors():
+    # Lee el CSV de productos y arma un dict {producto: color_hex}
+    colores = {}
+    if not _HAS_PRODUCTS or cargar_productos is None:
+        return colores
+    try:
+        for prod_row in cargar_productos():  # type: ignore
+            nombre = (prod_row.get("producto") or "").strip()
+            color_raw = (prod_row.get("matrix_cc") or "").strip()
+            color = _normalize_color(color_raw)
+            if nombre and color:
+                colores[nombre] = color
+    except Exception:
+        # No queremos romper la pestaña por un problema de colores
+        pass
+    return colores
+
+
+
+def _load_matrix_colors():
+    colores = {}
+    if not _HAS_PRODUCTS or cargar_productos is None:
+        return colores
+    try:
+        for prod_row in cargar_productos():  # type: ignore
+            nombre = (prod_row.get("producto") or "").strip()
+            color_raw = (prod_row.get("matrix_cc") or "").strip()
+            color = _normalize_color(color_raw)
+            if nombre and color:
+                colores[nombre] = color
+    except Exception:
+        pass
+    return colores
+
 def _parse_fecha_multi(s: str):
     s = (s or "").strip()
     if not s:
@@ -507,38 +566,77 @@ class TabControlEntregas:
             self.on_refresh_all()
 
     # --- Configura columnas de la matriz (cliente + productos + total) ---
-    def _reconfig_matrix_columns(self, productos):
-        cols = ["cliente"] + list(productos) + ["Total"]
+        # --- Configura columnas de la matriz (PRODUCTO x CLIENTE + total) ---
+    def _reconfig_matrix_columns(self, clientes):
+        """
+        Filas  : productos
+        Columnas: clientes + columna de Total al final.
+        """
+        cols = ["producto"] + list(clientes) + ["Total"]
         self.tree_res["columns"] = cols
-        self.tree_res.heading("cliente", text="Cliente")
-        self.tree_res.column("cliente", width=240, anchor="w", stretch=False)
-        for p in productos:
-            self.tree_res.heading(p, text=p)
-            self.tree_res.column(p, width=110, anchor="e", stretch=False)
+
+        self.tree_res.heading("producto", text="Producto")
+        self.tree_res.column("producto", width=260, anchor="w", stretch=False)
+
+        for c in clientes:
+            self.tree_res.heading(c, text=c)
+            self.tree_res.column(c, width=110, anchor="e", stretch=False)
+
         self.tree_res.heading("Total", text="Total")
         self.tree_res.column("Total", width=110, anchor="e", stretch=False)
 
+
+
+
     # --- Llena filas de la matriz y agrega totales ---
-    def _fill_matrix(self, matriz, productos):
+    def _fill_matrix(self, matriz_prod, productos, clientes, color_map):
+        """
+        Filas : productos (cada fila se colorea según `color_map`).
+        Columnas : clientes + Total.
+        """
+        # Limpiar
         for iid in self.tree_res.get_children():
             self.tree_res.delete(iid)
-        for cliente in sorted(matriz.keys(), key=lambda s: s.lower()):
-            row_vals = [cliente]
+
+        # Filas por producto
+        for prod in productos:
+            row_cliente = matriz_prod.get(prod, {})
+            row_vals = [prod]
             total_row = 0
-            for p in productos:
-                v = matriz[cliente].get(p, 0)
+            for cli in clientes:
+                v = row_cliente.get(cli, 0)
                 row_vals.append("" if v == 0 else str(v))
                 total_row += v
             row_vals.append("" if total_row == 0 else str(total_row))
-            self.tree_res.insert("", "end", values=row_vals)
-        totales = []
-        for p in productos:
-            col_sum = sum(matriz[c].get(p, 0) for c in matriz)
-            totales.append(col_sum)
-        total_general = sum(totales)
-        footer = ["Total"] + [("" if s == 0 else str(s)) for s in totales] + [("" if total_general == 0 else str(total_general))]
+
+            tags = ()
+            color = color_map.get(prod)
+            if color:
+                safe = re.sub(r"[^a-zA-Z0-9_]", "_", prod) or "prod"
+                tag_name = f"prod_{safe}"
+                # Configuramos el tag (si ya existe no pasa nada)
+                self.tree_res.tag_configure(tag_name, background=color)
+                tags = (tag_name,)
+
+            self.tree_res.insert("", "end", values=row_vals, tags=tags)
+
+        # Fila de totales por cliente
+        col_totales = []
+        for cli in clientes:
+            s = 0
+            for prod in productos:
+                s += matriz_prod.get(prod, {}).get(cli, 0)
+            col_totales.append(s)
+        total_general = sum(col_totales)
+
+        footer = ["Total"] + [("" if s == 0 else str(s)) for s in col_totales] + [
+            "" if total_general == 0 else str(total_general)
+        ]
+        # Línea en blanco de separación
         self.tree_res.insert("", "end", values=[""] * len(footer))
+        # Fila de totales
         self.tree_res.insert("", "end", values=footer)
+
 
     # ---------- Carga/Refresco ----------
     def refrescar(self):
@@ -549,10 +647,12 @@ class TabControlEntregas:
         pedidos = _leer_pedidos_any()
        
         dia = self._selected_date()
-        
+        color_map = _load_matrix_colors()
 
-        matriz = defaultdict(lambda: defaultdict(int))
+        matriz = defaultdict(lambda: defaultdict(int))   # cliente -> producto -> cantidad
         productos_set = set()
+        clientes_set = set()
+
 
         for p in pedidos:
             estado = (p.get("estado","") or "").strip().lower()
@@ -576,8 +676,10 @@ class TabControlEntregas:
                     comp_ok = max(0, min(comp, cant))
                     if comp_ok > 0:
                         matriz[cliente][prod] += comp_ok
+                        clientes_set.add(cliente)
                         if prod:
                             productos_set.add(prod)
+
 
 
             # Detalle (se mantiene para diagnóstico)
@@ -602,9 +704,24 @@ class TabControlEntregas:
                 )
 
 
+        # Listas ordenadas de clientes y productos
+        clientes = sorted(clientes_set, key=lambda s: s.lower())
         productos = sorted(productos_set, key=lambda s: s.lower())
-        self._reconfig_matrix_columns(productos)
-        self._fill_matrix(matriz, productos)
+
+        # Transponer la matriz: de cliente→producto a producto→cliente
+        matriz_prod = defaultdict(lambda: defaultdict(int))
+        for cli, prods in matriz.items():
+            for prod, qty in prods.items():
+                matriz_prod[prod][cli] += qty
+
+        # Colores por producto desde el CSV de productos
+        color_map = _load_matrix_colors()
+
+        # Configurar columnas (PRODUCTO x CLIENTE) y llenar filas
+        self._reconfig_matrix_columns(clientes)
+        self._fill_matrix(matriz_prod, productos, clientes, color_map)
+
+
 
     # ---------- Cerrar viaje (genera fantasmas del día seleccionado) ----------
     def _cerrar_viaje_click(self):
