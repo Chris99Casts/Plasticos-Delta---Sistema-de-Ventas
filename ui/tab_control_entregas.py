@@ -616,6 +616,7 @@ class TabControlEntregas:
                 tag_name = f"prod_{safe}"
                 # Configuramos el tag (si ya existe no pasa nada)
                 self.tree_res.tag_configure(tag_name, background=color)
+                self.tree_res.tag_configure(tag_name, background=color, foreground="#000000")
                 tags = (tag_name,)
 
             self.tree_res.insert("", "end", values=row_vals, tags=tags)
