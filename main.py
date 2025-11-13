@@ -8,3 +8,4 @@ if __name__ == "__main__":
     root.mainloop()
 
 ## Este es el archivo principal para ejecutar la App de Nota de Venta.
+

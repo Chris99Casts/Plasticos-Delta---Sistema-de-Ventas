@@ -36,8 +36,10 @@ def _to_std_number(num_str: str) -> str:
 PEDIDOS_FIELDS = [
     "id_pedido","fecha","cliente","total","estado",
     "descuento","pagado","descuento_pago_pct","total_cobro",
-    "fecha_entrega","exento_minimo_desc","no_factura"
+    "fecha_entrega","exento_minimo_desc","no_factura",
+    "id_origen","fecha_creacion","es_fantasma"
 ]
+
 DETALLE_FIELDS = ["id_linea","id_pedido","producto","cantidad","cantidad_completada","precio_unitario","importe"]
 
 # ---------------- helpers de IO seguros (ignoran llaves extra) ----------------

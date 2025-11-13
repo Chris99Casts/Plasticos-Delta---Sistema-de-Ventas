@@ -867,24 +867,38 @@ class TabPedidos:
 
         items = []
         for r in items_raw:
-            c = int(r.get("cantidad") or 0)
+            c_total = int(r.get("cantidad") or 0)
             comp = int(r.get("cantidad_completada") or 0)
-            if c > 0 and comp >= c:  # SOLO las completadas
-                try:
-                    punit = float(str(r.get("precio_unitario","0")).replace(",", "."))
-                except:
-                    punit = 0.0
-                importe = punit * c
-                items.append({
-                    "cantidad": c,
-                    "producto": r.get("producto",""),
-                    "precio_unitario": f"{punit:.2f}",
-                    "importe": f"{importe:.2f}",
-                })
+
+            # Solo incluimos líneas que tengan algo completado
+            if c_total <= 0 or comp <= 0:
+                continue
+
+            # Por seguridad, no dejamos que la cantidad completada pase la total
+            if comp > c_total:
+                comp = c_total
+
+            try:
+                punit = float(str(r.get("precio_unitario", "0")).replace(",", "."))
+            except Exception:
+                punit = 0.0
+
+            importe = punit * comp
+
+            items.append({
+                "cantidad": comp,                       # <<--- usamos la cantidad COMPLETADA
+                "producto": r.get("producto", ""),
+                "precio_unitario": f"{punit:.2f}",
+                "importe": f"{importe:.2f}",
+            })
 
         if not items:
-            messagebox.showwarning("Atención", "No hay productos completados para generar la nota.")
+            messagebox.showwarning(
+                "Atención",
+                "No hay productos con cantidad completada para generar la nota."
+            )
             return
+
 
         try:
             pdf_path = generar_pdf_pedido(

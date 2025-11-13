@@ -126,37 +126,109 @@ _PEDIDOS_HEADERS_MIN = [
 _DETALLE_HEADERS_MIN = ["id_linea","id_pedido","producto","cantidad","cantidad_completada","precio_unitario"]
 
 def _csv_ensure_headers(path, headers):
+    """
+    Se asegura de que el CSV exista y tenga al menos las columnas indicadas en `headers`.
+    Si el archivo ya existe pero le faltan columnas, reescribe el encabezado
+    agregando las columnas nuevas y rellena esas columnas con "" en las filas viejas.
+    """
     if not path:
         raise RuntimeError("No hay ruta CSV.")
-    exists = os.path.exists(path)
-    if not exists:
+
+    # Si no existe o está vacío → crear desde cero
+    if (not os.path.exists(path)) or os.path.getsize(path) == 0:
         with open(path, "w", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=headers)
             wr.writeheader()
-        return headers
-    # Leer headers existentes
+        return list(headers)
+
+    # Leer encabezado actual + resto de filas
     with open(path, newline="", encoding="utf-8") as f:
         rdr = csv.reader(f)
         try:
             cur = next(rdr)
         except StopIteration:
             cur = []
+        data_rows = list(rdr)
+
+    cur = [c.strip() for c in cur]
     if not cur:
+        # Archivo sin encabezado útil → reescribimos directo
         with open(path, "w", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=headers)
             wr.writeheader()
-        return headers
-    return cur
+        return list(headers)
+
+    final_headers = list(cur)
+    changed = False
+    for h in headers:
+        if h not in final_headers:
+            final_headers.append(h)
+            changed = True
+
+    # Si no hubo cambios, regresamos lo que ya había
+    if not changed:
+        return final_headers
+
+    # Reescribir archivo con el nuevo encabezado
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=final_headers)
+        wr.writeheader()
+        for row in data_rows:
+            row_dict = {cur[i]: val for i, val in enumerate(row) if i < len(cur)}
+            out = {h: row_dict.get(h, "") for h in final_headers}
+            wr.writerow(out)
+
+    return final_headers
+
 
 def _csv_append_row(path, headers, row):
+    """
+    Agrega una fila al CSV garantizando que tenga exactamente las columnas de `headers`.
+    """
+    row = row or {}
+    clean_row = {h: row.get(h, "") for h in headers}
     with open(path, "a", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=headers)
-        wr.writerow(row)
+        # El encabezado ya debió haberse escrito por _csv_ensure_headers
+        wr.writerow(clean_row)
+
+
 
 def _new_fantasma_id(base_id: str):
-    # ID fantasma legible y único
-    ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"PH-{base_id}-{ts}"
+    """
+    Genera un id de pedido fantasma corto, único por pedido origen.
+    Formato: PH-<id_origen>-NN
+    Ejemplo: PH-202511-003-01
+    """
+    base_id = str(base_id).strip()
+    prefix = f"PH-{base_id}-"
+
+    # Si no tenemos archivo o path, usa un sufijo mínimo de emergencia
+    if not PEDIDOS_PATH or not os.path.exists(PEDIDOS_PATH):
+        return f"{prefix}01"
+
+    max_seq = 0
+    try:
+        with open(PEDIDOS_PATH, newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                fid = (row.get("id_pedido") or "").strip()
+                if not fid.startswith(prefix):
+                    continue
+                parts = fid.split("-")
+                # Última parte como entero (el NN)
+                try:
+                    seq = int(parts[-1])
+                    if seq > max_seq:
+                        max_seq = seq
+                except Exception:
+                    continue
+    except Exception:
+        # Si algo falla al leer, regresamos al primer sufijo
+        return f"{prefix}01"
+
+    return f"{prefix}{max_seq + 1:02d}"
+
 
 def _crear_pedido_fantasma(origen, cliente, items, fecha_creacion=None):
     """
