@@ -132,6 +132,7 @@ def cargar_productos():
                 rows=list(csv.DictReader(f, dialect=dialect))
         except Exception as e:
             last=e; continue
+        
         norm=[]
         for r in rows:
             rr={(k or "").strip().lower():(v or "").strip() for k,v in r.items()}
@@ -139,13 +140,17 @@ def cargar_productos():
             p  = _to_std_number(rr.get("precio","")) if rr.get("precio") else ""
             pd = _to_std_number(rr.get("precio_desc","")) if rr.get("precio_desc") else (p or "")
             color = rr.get("matrix_cc") or rr.get("matriz_cc") or ""
+            abrev = rr.get("abrev") or rr.get("abreviatura") or ""   # <-- NUEVO
+
             norm.append({
                 "producto":   producto,
                 "precio":     p,
                 "precio_desc":pd,
-                "matrix_cc":  color
+                "matrix_cc":  color,
+                "abrev":      abrev,                                  # <-- NUEVO
             })
         return norm
+
     raise UnicodeDecodeError(f"No se pudo leer {PRODUCTOS_PATH}. Último error: {last}")
 
 

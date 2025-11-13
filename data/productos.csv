@@ -1,51 +1,54 @@
-producto,precio,precio_desc,matrix_cc
-Cubeta redonda c/pico,26.08,23.47,"255, 214, 167"
-Cubeta rectangular c/pico,32.98,29.68,"255, 214, 167"
-Cubeta Pita c/tapa,40.56,36.5,"255, 214, 167"
-Bote 10 lts c/tapa,39.78,35.8,"255, 214, 167"
-Bote 9 lts c/tapa,38.11,34.3,"255, 214, 167"
-Bote 5 lts c/tapa,29.98,26.98,"254, 249, 194"
-Bote 3 lts c/tapa,21.31,19.18,"254, 249, 194"
-Bote 1.5 lts c/tapa,12.22,11,"254, 249, 194"
-Cesto Papelero,18.58,16.72,"236, 252, 202"
-Bandeja Chica,12.29,11.06,"236, 252, 202"
-Bandeja Grande,16.62,14.96,"236, 252, 202"
-Bandeja 3,17.84,16.06,"208, 250, 229"
-Bandeja 4,24.96,22.46,"208, 250, 229"
-Palangana 35,15.07,13.56,"208, 250, 229"
-Palangana 40,22.73,20.46,"208, 250, 229"
-Batidor 2,3.99,3.59,"236, 254, 255"
-Batidor 1,3.66,3.29,"236, 254, 255"
-Batidor 0,3.43,3.09,"236, 254, 255"
-Maceta 8,15.73,14.16,"250, 232, 255"
-Maceta 6,10.96,9.86,"250, 232, 255"
-Maceta 4,7.29,6.56,"250, 232, 255"
-Maceta Colgante,17.29,15.56,"250, 232, 255"
-Cubeta 8,15.2,13.68,"252, 231, 243"
-Cubeta 10,18.56,16.7,"252, 231, 243"
-Cubeta 12,19.38,17.44,"252, 231, 243"
-Cubeta 12 2da,16.2,14.58,"252, 231, 243"
-Cubeta 14,27.31,24.58,"252, 231, 243"
-Cubeta 16,32.03,28.83,"252, 231, 243"
-Cubeta 20,42.03,37.83,"252, 231, 243"
-Escurridor,79,71.1,"202, 213, 226"
-Escurridor c/blister,89,80.1,"202, 213, 226"
-Cesto Balancin,51.11,45.999,"202, 213, 226"
-Cesto Calado,0,0,"202, 213, 226"
-Caja Multiusos,47.94,43.146,"202, 213, 226"
-Bote Multiusos,0,0,"202, 213, 226"
-Recipiente redondo mediano,32.49,29.24,"202, 213, 226"
-Recipiente redondo grande,35.24,31.72,"202, 213, 226"
-Caja de Carnes,30.83,27.75,"202, 213, 226"
-Plato 3 Tostadas,5.41,4.87,"142, 197, 255"
-Plato Taquero grande,5.36,4.82,"142, 197, 255"
-Plato Taquero chico,5.17,4.65,"142, 197, 255"
-Plato Sopero,3.76,3.38,"142, 197, 255"
-Plato con división,13.59,12.23,"142, 197, 255"
-Vaso,4.17,3.75,"254, 242, 242"
-Vaso c/tapa,5.94,5.35,"254, 242, 242"
-Molcajete chico negro,3.22,2.9,"254, 242, 242"
-Molcajete chico colores,3.64,3.28,"254, 242, 242"
-Molcajete grande negro,8.18,7.36,"254, 242, 242"
-Molcajete grande colores,9.63,8.67,"254, 242, 242"
-Panera Ana,26.47,23.82,"202, 213, 226"
+producto,precio,precio_desc,matrix_cc,abrev
+Cubeta redonda c/pico,26.08,23.47,"255, 214, 167",cub circ pico
+Cubeta rectangular c/pico,32.98,29.68,"255, 214, 167",cub rec pico
+Cubeta Pita c/tapa,40.56,36.5,"255, 214, 167",cub pita
+Bote 10 lts c/tapa,39.78,35.8,"255, 214, 167",b9
+Bote 9 lts c/tapa,38.11,34.3,"255, 214, 167",b10
+Bote 5 lts c/tapa,29.98,26.98,"254, 249, 194",bote 5
+Bote 3 lts c/tapa,21.31,19.18,"254, 249, 194",bote 3
+Bote 1.5 lts c/tapa,12.22,11,"254, 249, 194",bote 1.5
+Cesto Papelero,18.58,16.72,"236, 252, 202",cst pap
+Bandeja Chica,12.29,11.06,"236, 252, 202",bndj ch
+Bandeja Grande,16.62,14.96,"236, 252, 202",bndj g
+Bandeja 3,17.84,16.06,"208, 250, 229",bndj 3
+Bandeja 4,24.96,22.46,"208, 250, 229",bndj 4
+Palangana 35,15.07,13.56,"208, 250, 229",plg 35
+Palangana 40,22.73,20.46,"208, 250, 229",plg 40
+Batidor 2,3.99,3.59,"236, 254, 255",bat 2
+Batidor 1,3.66,3.29,"236, 254, 255",bat 1
+Batidor 0,3.43,3.09,"236, 254, 255",bat 0
+Maceta 8 Barro,15.73,14.16,"250, 232, 255",mac 8b
+Maceta 8 Chocolate,15.73,14.16,"250, 232, 255",mac 8ch
+Maceta 6 Barro,10.96,9.86,"250, 232, 255",mac 6b
+Maceta 6 Chocolate,10.96,9.86,"250, 232, 255",mac 6ch
+Maceta 4 Barro,7.29,6.56,"250, 232, 255",mac 4b
+Maceta 4 Chocolate,7.29,6.56,"250, 232, 255",mac 4ch
+Maceta Colgante Barro,17.29,15.56,"250, 232, 255",mac colg b
+Maceta Colgante Chocolate,17.29,15.56,"250, 232, 255",mac colg ch
+Cubeta 8,15.2,13.68,"252, 231, 243",cub 8
+Cubeta 10,18.56,16.7,"252, 231, 243",cub 10
+Cubeta 12,19.38,17.44,"252, 231, 243",cub 12
+Cubeta 12 2da,16.2,14.58,"252, 231, 243",cub 12 eco
+Cubeta 14,27.31,24.58,"252, 231, 243",cub 14
+Cubeta 16,32.03,28.83,"252, 231, 243",cub 16
+Cubeta 20,42.03,37.83,"252, 231, 243",cub 20
+Escurridor,79,71.1,"202, 213, 226",esc
+Cesto Balancin,51.11,45.999,"202, 213, 226",cst bal
+Cesto Calado,0,0,"202, 213, 226",cst cal
+Caja Multiusos,47.94,43.146,"202, 213, 226",cja mult
+Bote Multiusos,0,0,"202, 213, 226",bte mult
+Recipiente redondo mediano,32.49,29.24,"202, 213, 226",recip med
+Recipiente redondo grande,35.24,31.72,"202, 213, 226",recip gde
+Caja de Carnes,30.83,27.75,"202, 213, 226",cj carn
+Plato 3 Tostadas,5.41,4.87,"142, 197, 255",plt 3T
+Plato Taquero grande,5.36,4.82,"142, 197, 255",plt taq gde
+Plato Taquero chico,5.17,4.65,"142, 197, 255",plt taq ch
+Plato Sopero,3.76,3.38,"142, 197, 255",plt sop
+Plato con división,13.59,12.23,"142, 197, 255",plt div
+Vaso,4.17,3.75,"254, 242, 242",v600
+Vaso c/tapa,5.94,5.35,"254, 242, 242",v600 c/t
+Molcajete chico negro,3.22,2.9,"254, 242, 242",molc ngr ch
+Molcajete chico colores,3.64,3.28,"254, 242, 242",molc col ch
+Molcajete grande negro,8.18,7.36,"254, 242, 242",mol ngr gde
+Molcajete grande colores,9.63,8.67,"254, 242, 242",mol col gde
+Panera Ana,26.47,23.82,"202, 213, 226",pan ana

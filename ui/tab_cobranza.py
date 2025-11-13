@@ -13,6 +13,7 @@ from data.csv_manager import (
     quitar_descuento_forzado,
     registrar_abono,
     leer_abonos,
+    _es_pedido_fantasma,
     set_no_factura,
 )
 
@@ -268,17 +269,25 @@ class TabCobranza:
         return str(vals[0])
 
     def _filtrados_basicos(self):
-        """Filtro rápido por pedido # y excluir cancelados (previo a filtros por encabezado)."""
+        """Filtro rápido por pedido # y excluir cancelados y fantasmas (previo a filtros por encabezado)."""
         try:
             rows = leer_pedidos()
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron leer pedidos.\n{e}")
             return []
-        rows = [r for r in rows if (r.get("estado","").strip().lower() != "cancelado")]
+
+        # Excluir cancelados Y pedidos fantasma
+        rows = [
+            r for r in rows
+            if (r.get("estado","").strip().lower() != "cancelado")
+            and not _es_pedido_fantasma(r)
+        ]
+
         q = (self.var_buscar.get() or "").strip()
         if q:
             rows = [r for r in rows if q in (r.get("id_pedido",""))]
         return rows
+
 
     # =========================
     #  Refrescar (ahora “enriquece” filas y guarda en _raw_rows)

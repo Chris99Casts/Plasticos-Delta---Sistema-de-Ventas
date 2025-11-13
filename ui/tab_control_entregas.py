@@ -135,6 +135,26 @@ def _load_matrix_colors():
         pass
     return colores
 
+def _load_product_abbreviations():
+    """Devuelve dict {nombre_producto: abrev} para usar en la matriz impresa."""
+    abrev_map = {}
+    if not _HAS_PRODUCTS or cargar_productos is None:
+        return abrev_map
+    try:
+        for prod_row in cargar_productos():  # type: ignore
+            nombre = (prod_row.get("producto") or "").strip()
+            ab = (prod_row.get("abrev") or prod_row.get("abreviatura") or "").strip()
+            if nombre and ab:
+                abrev_map[nombre] = ab
+    except Exception:
+        # No queremos romper la pestaña por un problema de productos
+        pass
+    return abrev_map
+
+# Cache para abreviaturas usadas al imprimir la matriz
+_MATRIX_ABBREVS = _load_product_abbreviations()
+
+
 def _parse_fecha_multi(s: str):
     s = (s or "").strip()
     if not s:
@@ -475,16 +495,28 @@ class TabControlEntregas:
         self.frame.grid_rowconfigure(4, weight=2)  # detalle
     
     def _matrix_snapshot(self):
-        """Lee columnas y filas actuales de tree_res (ignorando la fila separadora vacía)."""
+        """Lee columnas y filas actuales de tree_res (ignorando la fila separadora vacía).
+
+        Al exportar para impresión, si existe una abreviatura para el producto en el
+        catálogo (columna 'abrev'), se usa esa abreviatura en lugar del nombre completo.
+        """
         cols = list(self.tree_res["columns"])
         rows = []
+        abrev_map = _MATRIX_ABBREVS or {}
         for iid in self.tree_res.get_children(""):
             vals = list(self.tree_res.item(iid, "values"))
             # ignora filas vacías (separador) si las hay
             if not any(str(v).strip() for v in vals):
                 continue
+            if vals:
+                nombre = str(vals[0]).strip()  # columna "Producto"
+                ab = abrev_map.get(nombre)
+                if ab:
+                    vals[0] = ab   # sustituye por abreviación SOLO para exportar
             rows.append(vals)
         return cols, rows
+
+
     
     def _imprimir_matriz_click(self):
         cols, rows = self._matrix_snapshot()
@@ -519,16 +551,31 @@ class TabControlEntregas:
             messagebox.showerror("Error", f"No se pudo exportar la matriz.\n{e}")
     
     def _export_matrix_pdf(self, pdf_path, cols, rows, fecha_str):
-        # Documento en OFICIO apaisado con márgenes compactos
+        """
+        Genera el PDF de la matriz en tamaño OFICIO apaisado.
+        Usa las columnas y filas que ya vienen de _matrix_snapshot.
+        """
         from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle,
+            Paragraph, Spacer, KeepInFrame
+        )
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.pagesizes import landscape
+
+        # Página oficio horizontal
         page_w, page_h = landscape(OFICIO)
         left = right = 10 * mm
-        top  = bottom = 10 * mm
+        top = bottom = 10 * mm
 
         doc = SimpleDocTemplate(
             pdf_path,
             pagesize=(page_w, page_h),
-            leftMargin=left, rightMargin=right, topMargin=top, bottomMargin=bottom
+            leftMargin=left,
+            rightMargin=right,
+            topMargin=top,
+            bottomMargin=bottom,
         )
 
         styles = getSampleStyleSheet()
@@ -537,7 +584,56 @@ class TabControlEntregas:
         title_style.leading = 16
 
         story = []
-        story.append(Paragraph(f"<b>Control de Entregas – Matriz {fecha_str}</b>", title_style))
+
+        # Título
+        story.append(Paragraph(
+            f"<b>Control de Entregas – Matriz {fecha_str}</b>",
+            title_style
+        ))
+        story.append(Spacer(1, 6 * mm))
+
+        # Data de la tabla (encabezados + filas)
+        data = []
+        data.append([str(c) for c in cols])
+        for row in rows:
+            data.append([("" if v is None else str(v)) for v in row])
+
+        # Tabla
+        table = Table(data, repeatRows=1)
+
+        table_style = TableStyle([
+            # Encabezado
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
+            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+
+            # Cuerpo
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 1), (-1, -1), 7),
+            ("ALIGN", (0, 1), (0, -1), "LEFT"),    # columna producto
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),  # cantidades
+
+            # Bordes y cuadriculado
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ])
+
+        table.setStyle(table_style)
+
+        # Encerramos la tabla en un KeepInFrame para que se escale y quepa en la página
+        kif = KeepInFrame(
+            maxWidth=page_w - left - right,
+            maxHeight=page_h - top - bottom - 20,  # margen extra por el título
+            content=[table],
+            hAlign="LEFT",
+            vAlign="TOP",
+        )
+
+        story.append(kif)
+
+        # ¡Aquí es donde de verdad se genera el PDF!
+        doc.build(story)
 
 
     def _open_file(self, path):
