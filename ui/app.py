@@ -5,6 +5,7 @@ from ui.tab_pedidos import TabPedidos
 from data.csv_manager import ensure_files
 from ui.tab_cobranza import TabCobranza
 from ui.tab_control_entregas import TabControlEntregas 
+from ui.tab_captura_rapida import TabCapturaRapida
 import tkinter.font as tkfont 
 import json, os
 
@@ -144,6 +145,17 @@ class NotaVentaApp:
                                      check_style="Dark.TCheckbutton",
                                      on_refresh_all=self.refresh_all,
                                      tree_style="Dark.Treeview")
+        self.tab_rapida = TabCapturaRapida(
+            notebook,
+            frame_style="Dark.TFrame",
+            label_style="Dark.TLabel",
+            button_style="Dark.TButton",
+            entry_style="Dark.TEntry",
+            tree_style="Dark.Treeview",
+            on_refresh_all=self.refresh_all,
+        )
+        notebook.add(self.tab_rapida.frame, text="Alta rápida")
+
         self.tab_pedidos = TabPedidos(notebook,
                                       frame_style="Dark.TFrame",
                                       on_refresh_all=self.refresh_all,
@@ -249,6 +261,12 @@ class NotaVentaApp:
         try: 
             self.tab_ctrl.refrescar()      # <<--- IMPORTANTE: incluir Control de Entregas
         except:
+            pass
+        
+        try:
+            if hasattr(self.tab_rapida, "refrescar"):
+                self.tab_rapida.refrescar()
+        except Exception:
             pass
 
     
