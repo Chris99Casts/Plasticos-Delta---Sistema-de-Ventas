@@ -7,7 +7,7 @@ from ui.tab_cobranza import TabCobranza
 from ui.tab_control_entregas import TabControlEntregas 
 from ui.tab_captura_rapida import TabCapturaRapida
 import tkinter.font as tkfont 
-import json, os
+import json, os, subprocess, platform
 
 class NotaVentaApp:
     def __init__(self, root):
@@ -15,11 +15,19 @@ class NotaVentaApp:
         self.root.title("Generador de Notas de Venta")
         self.root.configure(bg="#1e1e1e")
 
-        # Pantalla completa
+        # Pantalla completa / maximizado (manteniendo la barra de título)
         self.is_fullscreen = False
+        self._prev_geometry = None  # para recordar tamaño anterior
         self.root.bind("<F11>", self.toggle_fullscreen)
         self.root.bind("<Escape>", self.exit_fullscreen)
-        self.root.attributes('-fullscreen', True)
+
+        # Arrancar maximizada, pero con barra de título y botones
+        try:
+            self.root.state('zoomed')
+        except tk.TclError:
+            # En sistemas donde 'zoomed' no existe, simplemente ignora
+            pass
+
 
         # Crea CSVs base
         ensure_files()
@@ -145,6 +153,7 @@ class NotaVentaApp:
                                      check_style="Dark.TCheckbutton",
                                      on_refresh_all=self.refresh_all,
                                      tree_style="Dark.Treeview")
+        
         self.tab_rapida = TabCapturaRapida(
             notebook,
             frame_style="Dark.TFrame",
@@ -154,7 +163,7 @@ class NotaVentaApp:
             tree_style="Dark.Treeview",
             on_refresh_all=self.refresh_all,
         )
-        notebook.add(self.tab_rapida.frame, text="Alta rápida")
+        notebook.add(self.tab_rapida.frame, text="Quick Capture")
 
         self.tab_pedidos = TabPedidos(notebook,
                                       frame_style="Dark.TFrame",
@@ -205,27 +214,60 @@ class NotaVentaApp:
         self.root.bind_all("<Control-underscore>", lambda e: _zoom(-0.10))
         self.root.bind_all("<Control-0>", _reset_zoom)
 
+        self._setup_touch_keyboard_support()
 
 
 
-    # Pantalla completa
+
     def toggle_fullscreen(self, event=None):
-        self.is_fullscreen = not self.is_fullscreen
-        try:
-            self.root.attributes('-fullscreen', self.is_fullscreen)
-        except:
-            self.root.state('zoomed')
+        """
+        F11: alterna entre ventana normal y maximizada,
+        pero siempre con barra de título y botones.
+        """
+        if not self.is_fullscreen:
+            # Activar "fullscreen" = maximizar
+            self.is_fullscreen = True
+            try:
+                # Guarda tamaño/posición actual para restaurar después
+                self._prev_geometry = self.root.geometry()
+            except Exception:
+                self._prev_geometry = None
+
+            # Asegúrate de NO estar en modo -fullscreen
+            try:
+                self.root.attributes('-fullscreen', False)
+            except Exception:
+                pass
+
+            # Maximizar ventana (con barra de título)
+            try:
+                self.root.state('zoomed')
+            except Exception:
+                pass
+        else:
+            # Si ya está en "fullscreen", salimos
+            self.exit_fullscreen()
 
     def exit_fullscreen(self, event=None):
+        """ESC: vuelve a la ventana normal."""
+        self.is_fullscreen = False
         try:
             self.root.attributes('-fullscreen', False)
-        except:
+        except Exception:
             pass
+
         try:
             self.root.state('normal')
-        except:
+        except Exception:
             pass
-        self.is_fullscreen = False
+
+        # Restaura la geometría anterior si la tenemos
+        try:
+            if getattr(self, "_prev_geometry", None):
+                self.root.geometry(self._prev_geometry)
+        except Exception:
+            pass
+
 
     def refresh_all(self):
         """Refresca todas las tabs que expongan .refrescar()."""
@@ -268,6 +310,41 @@ class NotaVentaApp:
                 self.tab_rapida.refrescar()
         except Exception:
             pass
+    
+    def _setup_touch_keyboard_support(self):
+        """
+        En Surface / Windows lanza el teclado táctil cuando
+        una caja de texto o combobox recibe el foco.
+        """
+        if platform.system() != "Windows":
+            return  # sólo aplica en Windows
+
+        # Función interna para lanzar el teclado
+        def _launch_tabtip(event=None):
+            # Rutas típicas del teclado táctil / OSK
+            candidates = [
+                r"C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe",
+                r"C:\Program Files (x86)\Common Files\microsoft shared\ink\TabTip.exe",
+                r"C:\Windows\System32\osk.exe",
+            ]
+            for p in candidates:
+                if os.path.exists(p):
+                    try:
+                        subprocess.Popen(p)
+                        break
+                    except Exception:
+                        continue
+
+        # Guardamos referencia para que no la limpie el GC
+        self._launch_tabtip = _launch_tabtip
+
+        # Vinculamos para todos los Entry / Combobox / Text
+        for cls in ("Entry", "TEntry", "TCombobox", "Text"):
+            try:
+                self.root.bind_class(cls, "<FocusIn>", self._launch_tabtip, add="+")
+            except tk.TclError:
+                pass
+
 
     
 
