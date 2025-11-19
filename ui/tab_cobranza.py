@@ -21,7 +21,7 @@ from data.csv_manager import (
 # Misma ruta/usuario/semilla que TabNuevaNota
 ADMIN_CFG = os.path.join(os.getcwd(), "admin_cfg.json")
 ADMIN_USER = "JPerez"
-DEFAULT_ADMIN_PASS = "18062002"
+DEFAULT_ADMIN_PASS = "18052002"
 
 def _try_parse_dt(s: str):
     s = (s or "").strip()

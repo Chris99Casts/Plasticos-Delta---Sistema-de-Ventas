@@ -214,6 +214,10 @@ class NotaVentaApp:
         self.root.bind_all("<Control-minus>",  lambda e: _zoom(-0.10))
         self.root.bind_all("<Control-underscore>", lambda e: _zoom(-0.10))
         self.root.bind_all("<Control-0>", _reset_zoom)
+        
+        # Soporte para teclado táctil en Surface / Windows
+        self._setup_touch_keyboard_support()
+
 
         self._setup_touch_keyboard_support()
 
@@ -345,6 +349,91 @@ class NotaVentaApp:
                 self.root.bind_class(cls, "<FocusIn>", self._launch_tabtip, add="+")
             except tk.TclError:
                 pass
+
+    def _launch_touch_keyboard(self, event=None):
+        """
+        Intenta abrir el teclado táctil moderno (TabTip) en Windows Surface.
+        No usa el teclado clásico 'osk.exe'.
+        """
+        if platform.system() != "Windows":
+            return
+
+        # Posibles rutas de TabTip.exe
+        candidates = [
+            os.path.join(os.environ.get("ProgramFiles", r"C:\\Program Files"),
+                         "Common Files", "microsoft shared", "ink", "TabTip.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\\Program Files (x86)"),
+                         "Common Files", "microsoft shared", "ink", "TabTip.exe"),
+        ]
+
+        exe = None
+        for p in candidates:
+            if os.path.exists(p):
+                exe = p
+                break
+
+        if exe is None:
+            # Intento extra: buscar en PATH
+            exe = shutil.which("TabTip.exe") or shutil.which("tabtip.exe")
+
+        if exe:
+            try:
+                # os.startfile suele lanzar mejor apps modernas (ShellExecute)
+                os.startfile(exe)
+            except OSError:
+                try:
+                    subprocess.Popen(
+                        [exe],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception:
+                    # Si falla, evitamos que truene la app
+                    pass
+
+    def _setup_touch_keyboard_support(self):
+        """
+        Crea un botón 'Teclado' y enlaza los campos de texto para que intenten
+        abrir el teclado táctil moderno de Windows (TabTip) en Surface.
+        """
+        if platform.system() != "Windows":
+            return
+
+        # 1) Botón flotante en la esquina superior derecha
+        try:
+            kb_btn = tk.Button(
+                self.root,
+                text="Teclado",
+                command=self._launch_touch_keyboard,
+                bg="#333333",
+                fg="white",
+                relief="flat",
+                padx=8,
+                pady=2
+            )
+            kb_btn.place(relx=1.0, x=-10, y=10, anchor="ne")
+            self._kb_btn = kb_btn
+        except Exception:
+            pass
+
+        # 2) Al tocar entradas/combos, intenta abrir TabTip
+        for cls in ("Entry", "TEntry", "TCombobox", "Text"):
+            try:
+                self.root.bind_class(
+                    cls, "<Button-1>",
+                    self._launch_touch_keyboard,
+                    add="+"
+                )
+                self.root.bind_class(
+                    cls, "<FocusIn>",
+                    self._launch_touch_keyboard,
+                    add="+"
+                )
+            except tk.TclError:
+                pass
+
+
+
 
 
     

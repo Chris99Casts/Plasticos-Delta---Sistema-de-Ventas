@@ -32,7 +32,7 @@ NOTAS_DIR = os.path.join(os.getcwd(), "Notas")
 # Config de administrador
 ADMIN_CFG = os.path.join(os.getcwd(), "admin_cfg.json")
 ADMIN_USER = "JPerez"  # usuario fijo
-DEFAULT_ADMIN_PASS = "18062002"  # podrás cambiarla en la ventana
+DEFAULT_ADMIN_PASS = "18052002"  # podrás cambiarla en la ventana
 
 
 

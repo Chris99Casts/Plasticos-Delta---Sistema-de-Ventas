@@ -327,42 +327,68 @@ class TabPedidos:
         self._pintar_tree_aplicando_filtros_y_orden()
 
     def _filtrar_por_ui_superior(self, pedidos):
-        """Aplica filtros existentes (Estado y Pedido#)."""
-        estado_sel = (self.cmb_estado.get() or "Todos").strip()
+        """
+        Aplica filtros de la barra superior (Estado y Pedido#).
+        Si el valor del combo es raro / vacío, se trata como 'Todos'.
+        """
+        estado_raw = (self.cmb_estado.get() or "").strip()
+        estado_sel = estado_raw.lower() if estado_raw else "todos"
         q = (self.var_buscar.get() or "").strip()
+
+        # Estados válidos conocidos
+        valid_states = {"todos", "pendiente", "parcial", "completado", "cancelado", "fantasma"}
+        if estado_sel not in valid_states:
+            estado_sel = "todos"
 
         out = []
         for p in pedidos:
             es_fantasma = _es_fantasma_row(p)
-            estado_p = (p.get("estado","") or "").strip().capitalize()
+            estado_p = (p.get("estado", "") or "").strip().lower()
 
-            # 1) Estado
-            if estado_sel == "Todos":
+            # 1) Filtro por número de pedido (si hay texto en la caja)
+            if q:
+                id_p = str(p.get("id_pedido", ""))
+                if q not in id_p:
+                    continue
+
+            # 2) Filtro por estado
+            if estado_sel == "todos":
+                # No filtramos por estado
                 pass
-            elif estado_sel == "Fantasma":
+            elif estado_sel == "fantasma":
                 if not es_fantasma:
                     continue
             else:
+                # Para otros estados normales, excluimos fantasmas
                 if es_fantasma:
                     continue
-                if estado_p.lower() != estado_sel.lower():
+                if estado_p != estado_sel:
                     continue
 
-            # 2) Pedido #
-            if q and q not in (p.get("id_pedido","")):
-                continue
-
             out.append(p)
+
         return out
 
+
+
+
     def _aplicar_filtros_header(self, rows):
+        """
+        Aplica filtros por columna (popup de encabezado).
+        - Si no hay filtros activos → regresa las filas tal cual.
+        - Si alguna columna tiene conjunto vacío → se ignora ese filtro (equivale a 'sin filtro').
+        """
+        if not self._active_filters:
+            return rows
+
         out = []
         for r in rows:
             ok = True
             for col_key, allowed in self._active_filters.items():
-                if not allowed:  # si quedó vacío, no hay coincidencias
-                    ok = False
-                    break
+                # allowed vacío = sin filtro para esa columna
+                if not allowed:
+                    continue
+
                 val = (r.get(col_key) or "")
                 # Para fechas, compara por día únicamente
                 if col_key in ("fecha", "fecha_entrega"):
@@ -373,6 +399,7 @@ class TabPedidos:
             if ok:
                 out.append(r)
         return out
+
 
 
     def _pintar_tree_aplicando_filtros_y_orden(self):
@@ -541,9 +568,15 @@ class TabPedidos:
         item_vars = []
 
         def _apply_and_close(selected_values:set):
-            self._active_filters[key] = selected_values
+            # Si no hay valores seleccionados → eliminamos el filtro de esa columna
+            if not selected_values:
+                self._active_filters.pop(key, None)
+            else:
+                self._active_filters[key] = selected_values
             self._pintar_tree_aplicando_filtros_y_orden()
             _safe_close()
+
+
 
         def _apply_single(value):
             _apply_and_close({value})
