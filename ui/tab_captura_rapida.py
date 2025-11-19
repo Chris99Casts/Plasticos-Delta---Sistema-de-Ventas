@@ -56,15 +56,55 @@ class TabCapturaRapida:
                 # índice de la fila activa (para resaltar)
         self._active_row = None
 
-        # estilos visuales para la fila activa
-        style = ttk.Style()
-        style.configure("ActiveRow.TFrame", background="#144d2a")
-        style.configure("ActiveRow.TLabel", background="#144d2a", foreground="white")
-        style.configure("ActiveRow.TEntry", fieldbackground="#206d3a")
+        # estilos visuales para la fila activa (oscuro, estilo de la app)
+        self._style = ttk.Style()
+        self._style.configure("ActiveRow.TFrame", background="#2b2b2b")
+        self._style.configure("ActiveRow.TLabel", background="#2b2b2b", foreground="white")
+        self._style.configure("ActiveRow.TEntry", fieldbackground="#3a3a3a", foreground="white")
+
+
 
 
         self._build_ui()
         self.refrescar()
+    
+    # -------------------- Helper de color matriz --------------------
+    def _normalize_color(self, raw):
+        """
+        Convierte algo tipo '255,0,0' o '255;0;0' o '#ff0000' a un color válido de Tk.
+        Si no se puede interpretar, regresa None.
+        """
+        s = (raw or "").strip()
+        if not s:
+            return None
+
+        # Aceptamos directamente hex (#RGB o #RRGGBB)
+        if s.startswith("#"):
+            if len(s) in (4, 7):
+                return s
+            return None
+
+        # Reemplazar ; por , y quitar espacios
+        s = s.replace(";", ",").replace(" ", "")
+        parts = s.split(",")
+
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            try:
+                r, g, b = [max(0, min(255, int(p))) for p in parts]
+            except Exception:
+                return None
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        # Último intento: nombres simples de color
+        nombres = {
+            "red", "green", "blue", "yellow", "orange", "purple",
+            "cyan", "magenta", "gray", "grey", "white", "black"
+        }
+        if s.lower() in nombres:
+            return s.lower()
+
+        return None
+
 
     # -------------------- UI --------------------
 
@@ -84,6 +124,24 @@ class TabCapturaRapida:
         self.lbl_desc = ttk.Label(top, text="Desc.: —", style=self.label_style)
         self.lbl_desc.grid(row=0, column=2, sticky="w", padx=(10, 0))
 
+        # Botones arriba para que el teclado táctil no los tape
+        self.btn_registrar = ttk.Button(
+            top,
+            text="Registrar pedido",
+            style=self.button_style,
+            command=self.registrar_pedido,
+        )
+        self.btn_registrar.grid(row=0, column=3, padx=(10, 6))
+
+        self.btn_limpiar = ttk.Button(
+            top,
+            text="Limpiar",
+            style=self.button_style,
+            command=self._limpiar,
+        )
+        self.btn_limpiar.grid(row=0, column=4)
+
+
         # Lista de sugerencias de clientes
         self.lista_sugerencias_cliente = tk.Listbox(
             self.frame, height=5, bg="#2d2d2d", fg="white", activestyle="dotbox"
@@ -100,12 +158,19 @@ class TabCapturaRapida:
         ttk.Label(headers, text="Cantidad", style=self.label_style)\
             .grid(row=0, column=1, sticky="w")
 
-        # --- contenedor scrollable para las filas de productos ---
+        # --- zona scrollable de productos ---
         container = ttk.Frame(self.frame, style=self.frame_style)
         container.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=(10, 0), pady=(4, 8))
-
-        self.frame.grid_rowconfigure(3, weight=1)
+        self.frame.grid_rowconfigure(3, weight=0)   # controlas altura con el canvas, no que se estire todo
         self.frame.grid_columnconfigure(0, weight=1)
+
+
+
+        # No dejamos que la fila 3 se estire a pantalla completa;
+        # así la zona de productos se mantiene más contenida.
+        self.frame.grid_rowconfigure(3, weight=0)
+        self.frame.grid_columnconfigure(0, weight=1)
+
 
         self.canvas = tk.Canvas(
             container,
@@ -140,26 +205,25 @@ class TabCapturaRapida:
 
         # Scroll con rueda del mouse (foco en canvas o en entries)
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+                # Ajustar la altura del canvas a ~45% de la ventana para que
+        # la zona de productos solo use parte de la pantalla.
+        self.frame.after(200, self._ajustar_altura_canvas)
 
-        # --- botones inferiores ---
-        btns = ttk.Frame(self.frame, style=self.frame_style)
-        btns.grid(row=4, column=0, columnspan=2, sticky="e", padx=10, pady=(0, 10))
-
-        self.btn_registrar = ttk.Button(
-            btns,
-            text="Registrar pedido",
-            style=self.button_style,
-            command=self.registrar_pedido,
-        )
-        self.btn_registrar.grid(row=0, column=0, padx=(0, 6))
-
-        self.btn_limpiar = ttk.Button(
-            btns,
-            text="Limpiar",
-            style=self.button_style,
-            command=self._limpiar,
-        )
-        self.btn_limpiar.grid(row=0, column=1)
+    def _ajustar_altura_canvas(self):
+        """Ajusta la altura visible del canvas a ~45% de la ventana."""
+        try:
+            top = self.frame.winfo_toplevel()
+            h = top.winfo_height()
+            if h <= 0:
+                return
+            new_h = int(h * 0.45)
+            if new_h > 80:
+                try:
+                    self.canvas.configure(height=new_h)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # -------------------- Scroll wheel --------------------
 
@@ -213,18 +277,49 @@ class TabCapturaRapida:
         for idx, p in enumerate(self.productos_data):
             nombre = p.get("producto", "")
 
+            # Color base desde el CSV (matrix_cc)
+            raw_color = p.get("matrix_cc", "")
+            bg_color = self._normalize_color(raw_color)
+
+            # Estilos base
+            frame_style = self.frame_style
+            label_style = self.label_style
+            entry_style = self.entry_style
+
+            # Si hay color, creamos estilos específicos para esa fila
+            if bg_color:
+                base_name = f"QuickRow{idx}"
+                frame_style = f"{base_name}.TFrame"
+                label_style = f"{base_name}.TLabel"
+                entry_style = f"{base_name}.TEntry"
+
+                try:
+                    self._style.configure(frame_style, background=bg_color)
+                except Exception:
+                    frame_style = self.frame_style
+
+                try:
+                    self._style.configure(label_style, background=bg_color, foreground="black")
+                except Exception:
+                    label_style = self.label_style
+
+                try:
+                    self._style.configure(entry_style, fieldbackground=bg_color, foreground="black")
+                except Exception:
+                    entry_style = self.entry_style
+
             # ⬇️ Frame por fila para poder iluminarla completa
-            row_frame = ttk.Frame(self.inner, style=self.frame_style)
+            row_frame = ttk.Frame(self.inner, style=frame_style)
             row_frame.grid(row=idx, column=0, columnspan=2, sticky="ew", pady=1)
             row_frame.grid_columnconfigure(0, weight=1)
 
-            lbl = ttk.Label(row_frame, text=nombre, style=self.label_style)
+            lbl = ttk.Label(row_frame, text=nombre, style=label_style)
             lbl.grid(row=0, column=0, sticky="w", padx=(0, 10), pady=2)
 
             ent = ttk.Entry(
                 row_frame,
                 width=8,
-                style=self.entry_style,
+                style=entry_style,
                 validate="key",
                 validatecommand=vcmd,
             )
@@ -245,6 +340,10 @@ class TabCapturaRapida:
                     "entry": ent,
                     "frame": row_frame,
                     "label": lbl,
+                    # estilos base para poder restaurar cuando la fila deje de ser activa
+                    "frame_style": frame_style,
+                    "label_style": label_style,
+                    "entry_style": entry_style,
                 }
             )
 
@@ -255,6 +354,7 @@ class TabCapturaRapida:
                 self._set_active_row(0)
             except Exception:
                 pass
+
 
 
     # -------------------- Navegación ENTER --------------------
@@ -294,15 +394,19 @@ class TabCapturaRapida:
     # -------------------- Resalte fila activa --------------------    
     def _set_active_row(self, idx):
         """Resalta visualmente la fila activa."""
-        # Quitar resalte de la fila anterior
+        # Quitar resalte de la fila anterior y restaurar su estilo base
         try:
             if self._active_row is not None and 0 <= self._active_row < len(self._rows):
                 old = self._rows[self._active_row]
-                old["frame"].configure(style=self.frame_style)
-                old["label"].configure(style=self.label_style)
-                old["entry"].configure(style=self.entry_style)
+                base_f = old.get("frame_style", self.frame_style)
+                base_l = old.get("label_style", self.label_style)
+                base_e = old.get("entry_style", self.entry_style)
+                old["frame"].configure(style=base_f)
+                old["label"].configure(style=base_l)
+                old["entry"].configure(style=base_e)
         except Exception:
             pass
+
 
         # Si idx no es válido, no hay fila activa
         if idx is None or not (0 <= idx < len(self._rows)):

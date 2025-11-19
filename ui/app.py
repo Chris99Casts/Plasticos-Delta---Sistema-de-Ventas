@@ -7,7 +7,8 @@ from ui.tab_cobranza import TabCobranza
 from ui.tab_control_entregas import TabControlEntregas 
 from ui.tab_captura_rapida import TabCapturaRapida
 import tkinter.font as tkfont 
-import json, os, subprocess, platform
+import json, os, subprocess, platform, shutil
+
 
 class NotaVentaApp:
     def __init__(self, root):
